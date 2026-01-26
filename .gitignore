@@ -1,0 +1,9 @@
+# Build binary
+dvremove
+
+# Processing directories
+toConvert/
+Converted/
+
+# Logs
+logs/

@@ -1,0 +1,17 @@
+# DVRemove Configuration
+
+# Directory to watch for new MKV files
+input_dir: "./toConvert"
+
+# Directory for converted output files
+output_dir: "./Converted"
+
+# Directory for log files
+log_dir: "./logs"
+
+# Profile 5 GPU transcoding settings
+transcode:
+  encoder: "auto"           # auto, nvenc, vaapi, software
+  quality: 28               # CRF/CQ value: 0-51, lower = better quality (28 = good balance)
+  preset: "fast"            # slow (p7), medium (p5), fast (p3) - faster = lower quality
+  vaapi_device: "/dev/dri/renderD128"
