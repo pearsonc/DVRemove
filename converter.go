@@ -384,14 +384,15 @@ func (c *Converter) libplaceboNvencArgs(input, output string) []string {
 }
 
 // libplaceboVaapiArgs returns ffmpeg arguments for software decode + libplacebo + VAAPI encode.
-// VAAPI doesn't support the same CUDA→Vulkan interop, so uses software decode.
+// Software decode is faster than VAAPI hwaccel for this pipeline due to hwdownload overhead.
+// Uses derive_device to properly chain Vulkan (libplacebo) to VAAPI (encode).
 func (c *Converter) libplaceboVaapiArgs(input, output string) []string {
-	vf := "libplacebo=apply_dolbyvision=true:colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084,format=nv12,hwupload"
+	vf := "libplacebo=apply_dolbyvision=true:colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084,format=nv12,hwupload=derive_device=vaapi"
 	return []string{
 		"-y",
-		"-init_hw_device", "vulkan=vk",
-		"-filter_hw_device", "vk",
 		"-init_hw_device", fmt.Sprintf("vaapi=va:%s", c.transcode.VAAPIDevice),
+		"-init_hw_device", "vulkan=vk@va",
+		"-filter_hw_device", "vk",
 		"-i", input,
 		"-vf", vf,
 		"-c:v", "hevc_vaapi",

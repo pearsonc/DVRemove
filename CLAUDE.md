@@ -4,7 +4,7 @@
 
 ## Overview
 
-Converts Dolby Vision files for HDR10 fallback. Profile 7→8.1 remux (lossless), Profile 5→HDR10 transcode (NVDEC + libplacebo + NVENC). Written in Go.
+Converts Dolby Vision files for HDR10 fallback. Profile 7→8.1 remux (lossless), Profile 5→HDR10 transcode. Supports NVENC (Thor) and VAAPI (linux-lab-01). Written in Go.
 
 ## Commands
 
