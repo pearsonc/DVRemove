@@ -13,6 +13,7 @@ import (
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	oneShot := flag.Bool("once", false, "process existing files and exit (no watching)")
+	noUI := flag.Bool("no-ui", false, "disable terminal UI (headless mode)")
 	flag.Parse()
 
 	cfg, err := LoadConfig(*configPath)
@@ -30,11 +31,18 @@ func main() {
 	log.Info().
 		Str("input_dir", cfg.InputDir).
 		Str("output_dir", cfg.OutputDir).
+		Int("max_workers", cfg.Parallel.MaxWorkers).
 		Bool("one_shot", *oneShot).
 		Msg("dvremove starting")
 
+	// Create UI unless disabled
+	var ui *UI
+	if !*noUI {
+		ui = NewUI(cfg.Parallel.MaxWorkers)
+	}
+
 	converter := NewConverter(cfg.InputDir, cfg.OutputDir, cfg.Transcode, log)
-	watcher := NewWatcher(cfg.InputDir, converter, log)
+	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)
 
 	// Process any existing files
 	if err := watcher.ProcessExisting(); err != nil {

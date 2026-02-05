@@ -16,26 +16,33 @@ import (
 type Watcher struct {
 	inputDir   string
 	converter  *Converter
+	maxWorkers int
+	ui         *UI
 	log        zerolog.Logger
 	processing sync.Map // Track files currently being processed
 }
 
 // NewWatcher creates a new Watcher instance.
-func NewWatcher(inputDir string, converter *Converter, log zerolog.Logger) *Watcher {
+func NewWatcher(inputDir string, converter *Converter, maxWorkers int, ui *UI, log zerolog.Logger) *Watcher {
 	return &Watcher{
-		inputDir:  inputDir,
-		converter: converter,
-		log:       log.With().Str("component", "watcher").Logger(),
+		inputDir:   inputDir,
+		converter:  converter,
+		maxWorkers: maxWorkers,
+		ui:         ui,
+		log:        log.With().Str("component", "watcher").Logger(),
 	}
 }
 
 // ProcessExisting converts any MKV files already in the input directory.
+// Reads directory once, submits all jobs to worker pool, waits for completion.
 func (w *Watcher) ProcessExisting() error {
 	entries, err := os.ReadDir(w.inputDir)
 	if err != nil {
 		return fmt.Errorf("failed to read input directory %s: %w", w.inputDir, err)
 	}
 
+	// Collect MKV files
+	var files []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -43,15 +50,47 @@ func (w *Watcher) ProcessExisting() error {
 		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".mkv") {
 			continue
 		}
-
-		filePath := filepath.Join(w.inputDir, entry.Name())
-		w.log.Info().Str("file", entry.Name()).Msg("found existing file")
-
-		if err := w.processFile(filePath); err != nil {
-			w.log.Error().Err(err).Str("file", entry.Name()).Msg("failed to process existing file")
-		}
+		files = append(files, filepath.Join(w.inputDir, entry.Name()))
 	}
 
+	if len(files) == 0 {
+		w.log.Info().Msg("no files to process")
+		if w.ui != nil {
+			w.ui.PrintInfo("No files to process")
+		}
+		return nil
+	}
+
+	w.log.Info().Int("files", len(files)).Int("workers", w.maxWorkers).Msg("starting batch processing")
+
+	// Initialize UI
+	if w.ui != nil {
+		w.ui.Initialize(len(files))
+	}
+
+	// Create and start worker pool
+	pool := NewWorkerPool(w.maxWorkers, w.converter, w.ui, w.log)
+	pool.Start()
+
+	// Submit all jobs
+	go func() {
+		for _, filePath := range files {
+			w.log.Info().Str("file", filepath.Base(filePath)).Msg("queued")
+			pool.Submit(Job{FilePath: filePath})
+		}
+		pool.Close()
+	}()
+
+	// Drain results (UI handles display)
+	pool.Drain()
+	pool.Wait()
+
+	// Print summary
+	if w.ui != nil {
+		w.ui.PrintSummary()
+	}
+
+	w.log.Info().Int("processed", len(files)).Msg("batch complete")
 	return nil
 }
 

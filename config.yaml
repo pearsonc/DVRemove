@@ -15,3 +15,12 @@ transcode:
   quality: 28               # CRF/CQ value: 0-51, lower = better quality (28 = good balance)
   preset: "fast"            # slow (p7), medium (p5), fast (p3) - faster = lower quality
   vaapi_device: "/dev/dri/renderD128"
+
+# Parallel processing settings
+# NOTE: For GPU transcoding (Profile 5), multiple workers share the same GPU resources.
+# Total throughput stays roughly constant regardless of worker count:
+#   - 1 worker at 3.9x ≈ 3 workers at 1.3x each (same total throughput)
+# This is due to NVENC session limits, libplacebo/Vulkan contention, and memory bandwidth.
+# Recommended: max_workers=1 for GPU transcoding, higher values for Profile 7 remux batches.
+parallel:
+  max_workers: 1            # Concurrent conversions (1-8), adjust per system

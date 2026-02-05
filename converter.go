@@ -37,11 +37,11 @@ func (p DVProfile) String() string {
 
 // Converter handles DV profile conversion.
 type Converter struct {
-	inputDir   string
-	outputDir  string
-	transcode  TranscodeConfig
-	gpuDetect  *GPUDetector
-	log        zerolog.Logger
+	inputDir  string
+	outputDir string
+	transcode TranscodeConfig
+	gpuDetect *GPUDetector
+	log       zerolog.Logger
 }
 
 // NewConverter creates a new Converter instance.
@@ -109,9 +109,15 @@ func (c *Converter) DetectProfile(filePath string) (DVProfile, error) {
 }
 
 // Convert processes a single file and converts it to Profile 8.1.
-func (c *Converter) Convert(inputPath string) error {
+// The optional progress callback receives encoding progress updates.
+func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) error {
 	filename := filepath.Base(inputPath)
 	c.log.Info().Str("file", filename).Msg("starting conversion")
+
+	var cb ProgressCallback
+	if len(progressCb) > 0 {
+		cb = progressCb[0]
+	}
 
 	profile, err := c.DetectProfile(inputPath)
 	if err != nil {
@@ -122,7 +128,7 @@ func (c *Converter) Convert(inputPath string) error {
 
 	switch profile {
 	case Profile5:
-		return c.transcodeProfile5(inputPath)
+		return c.transcodeProfile5(inputPath, cb)
 	case Profile7:
 		// Profile 7 has BT.2020 base layer, HDR10 fallback works
 	case Profile8:
@@ -133,13 +139,16 @@ func (c *Converter) Convert(inputPath string) error {
 		return nil
 	}
 
-	// Create temp files for conversion pipeline
-	tempDir := os.TempDir()
+	// Create unique temp directory for this conversion
+	tempDir, err := os.MkdirTemp("", "dvremove-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
 	tempHEVC := filepath.Join(tempDir, baseName+".hevc")
 	tempHEVCWithMeta := filepath.Join(tempDir, baseName+".hdr10.hevc")
-	defer os.Remove(tempHEVC)
-	defer os.Remove(tempHEVCWithMeta)
 
 	// Step 1: Extract and convert DV metadata
 	if err := c.extractAndConvert(inputPath, tempHEVC, profile); err != nil {
@@ -287,7 +296,7 @@ func (c *Converter) remux(originalPath, videoPath, outputPath string) error {
 // transcodeProfile5 transcodes a Profile 5 file using NVDEC + libplacebo + NVENC.
 // Pipeline: NVDEC decode (preserves DV RPU) -> libplacebo (IPT→BT.2020) -> NVENC encode -> mux with audio.
 // libplacebo performs the colour space conversion from DV's IPT to standard BT.2020.
-func (c *Converter) transcodeProfile5(inputPath string) error {
+func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallback) error {
 	filename := filepath.Base(inputPath)
 	outputPath := filepath.Join(c.outputDir, filename)
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
@@ -307,10 +316,21 @@ func (c *Converter) transcodeProfile5(inputPath string) error {
 		return fmt.Errorf("libplacebo not available - required for Profile 5 colour conversion")
 	}
 
-	// Create temp file for transcoded video
-	tempDir := os.TempDir()
+	// Create unique temp directory for this conversion
+	tempDir, err := os.MkdirTemp("", "dvremove-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	transcodedVideo := filepath.Join(tempDir, baseName+".transcoded.mkv")
-	defer os.Remove(transcodedVideo)
+
+	// Get video duration for progress calculation
+	duration, err := getVideoDuration(inputPath)
+	if err != nil {
+		c.log.Warn().Err(err).Msg("could not get video duration, progress will be estimated")
+		duration = 0
+	}
 
 	// Step 1: Transcode with NVDEC + libplacebo + hardware encode
 	var args []string
@@ -324,9 +344,24 @@ func (c *Converter) transcodeProfile5(inputPath string) error {
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		c.log.Error().Str("output", string(output)).Msg("libplacebo transcode failed")
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// Parse progress from stderr
+	if progressCb != nil {
+		ffmpegProgress(stderr, duration, progressCb)
+	} else {
+		io.Copy(io.Discard, stderr)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		c.log.Error().Msg("libplacebo transcode failed")
 		return fmt.Errorf("ffmpeg libplacebo transcode failed: %w", err)
 	}
 

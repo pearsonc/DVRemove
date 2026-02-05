@@ -15,12 +15,18 @@ type TranscodeConfig struct {
 	VAAPIDevice string `yaml:"vaapi_device"` // VAAPI render device, default: /dev/dri/renderD128
 }
 
+// ParallelConfig holds parallel processing settings.
+type ParallelConfig struct {
+	MaxWorkers int `yaml:"max_workers"` // Number of concurrent conversions (1-8)
+}
+
 // Config holds application configuration.
 type Config struct {
 	InputDir  string          `yaml:"input_dir"`
 	OutputDir string          `yaml:"output_dir"`
 	LogDir    string          `yaml:"log_dir"`
 	Transcode TranscodeConfig `yaml:"transcode"`
+	Parallel  ParallelConfig  `yaml:"parallel"`
 }
 
 // LoadConfig reads configuration from a YAML file.
@@ -57,6 +63,9 @@ func (c *Config) setDefaults() {
 	if c.Transcode.VAAPIDevice == "" {
 		c.Transcode.VAAPIDevice = "/dev/dri/renderD128"
 	}
+	if c.Parallel.MaxWorkers == 0 {
+		c.Parallel.MaxWorkers = 1
+	}
 }
 
 func (c *Config) validate() error {
@@ -92,6 +101,10 @@ func (c *Config) validate() error {
 	validPresets := map[string]bool{"slow": true, "medium": true, "fast": true}
 	if !validPresets[c.Transcode.Preset] {
 		return fmt.Errorf("invalid preset %q, must be one of: slow, medium, fast", c.Transcode.Preset)
+	}
+
+	if c.Parallel.MaxWorkers < 1 || c.Parallel.MaxWorkers > 8 {
+		return fmt.Errorf("parallel.max_workers must be between 1 and 8, got %d", c.Parallel.MaxWorkers)
 	}
 
 	return nil
