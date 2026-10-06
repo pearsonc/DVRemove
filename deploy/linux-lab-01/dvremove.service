@@ -1,0 +1,11 @@
+[Unit]
+Description=dvremove nightly conversion run
+Documentation=file://%h/dvremove/build/deploy/linux-lab-01/run.sh
+
+[Service]
+Type=oneshot
+# bash runs the script so verify needs no copy of it on the host that checks the unit. run.sh holds the container's isolation flags and the live folder defaults (D17).
+ExecStart=/usr/bin/bash %h/dvremove/build/deploy/linux-lab-01/run.sh -c %h/dvremove/build/deploy/linux-lab-01/config.yaml
+# A run past 6 hours is ended by timeout inside the container; this bounds the unit itself (D19).
+TimeoutStartSec=6h15m
+ExecStopPost=-docker rm -f dvremove

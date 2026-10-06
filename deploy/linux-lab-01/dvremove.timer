@@ -1,0 +1,11 @@
+[Unit]
+Description=Start dvremove at 01:30
+
+[Timer]
+OnCalendar=*-*-* 01:30:00
+# A 01:30 missed while the host was off starts no run during the day.
+Persistent=false
+Unit=dvremove.service
+
+[Install]
+WantedBy=timers.target

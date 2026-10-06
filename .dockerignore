@@ -1,0 +1,14 @@
+# Keep the media, logs and history out of the build context (D25). The context is the
+# deploy folder or the repository root, and only the binary and Dockerfile are copied.
+toConvert/
+Converted/
+logs/
+.git
+*.go
+go.mod
+go.sum
+*.md
+config.yaml
+Makefile
+docs/
+deploy/

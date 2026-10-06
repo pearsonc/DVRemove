@@ -1,0 +1,18 @@
+# dvremove configuration for the test runs of wave 4 on linux-lab-01. Every path is a path inside the
+# container that run.sh starts; run.sh binds the live folders there (D17).
+# Keys are those of config.go and D21; an unknown key fails the load (D23).
+
+input_dir: "/data/toConvert"
+output_dir: "/data/Converted"
+log_dir: "/state/logs"
+temp_dir: "/state/tmp"      # /tmp is a 64 MB tmpfs, so temporary files go to the state folder (D11)
+state_dir: "/state"         # ledger.txt, journal.txt and dvremove.lock
+
+transcode:
+  encoder: "vaapi"
+  quality: 28               # -qp 28 on VAAPI, -crf 28 in software
+  preset: "fast"            # as the repository's config.yaml
+  vaapi_device: "/dev/dri/renderD128"
+
+parallel:
+  max_workers: 1
