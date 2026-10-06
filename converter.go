@@ -48,6 +48,7 @@ type Converter struct {
 	tempDir   string // where temporary files go; empty means the OS default
 	// freeSpace reports the bytes available to a non-root user on dir's filesystem.
 	freeSpace func(dir string) (uint64, error)
+	guardSettings
 }
 
 // SetTempDir sets the directory temporary files are created in; empty means the OS default.
@@ -98,6 +99,8 @@ func NewConverter(inputDir, outputDir string, transcode TranscodeConfig, log zer
 		gpuDetect: NewGPUDetector(transcode.VAAPIDevice, log),
 		log:       componentLog,
 		freeSpace: diskFree,
+
+		guardSettings: defaultGuardSettings(),
 	}
 }
 
@@ -272,6 +275,7 @@ func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVPr
 	doviStderr, _ := doviCmd.StderrPipe()
 
 	// Start both commands
+	guard := c.newMemGuard()
 	if err := ffmpegCmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
@@ -295,11 +299,15 @@ func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVPr
 			}
 		}(src.name, src.pipe)
 	}
+	stopGuard := guard.watch(ffmpegCmd.Process, doviCmd.Process)
 	drained.Wait()
 
 	// Wait for both to complete
 	ffmpegErr := ffmpegCmd.Wait()
 	doviErr := doviCmd.Wait()
+	if err := stopGuard(); err != nil {
+		return err
+	}
 
 	if ffmpegErr != nil {
 		return fmt.Errorf("ffmpeg failed: %w", ffmpegErr)
@@ -412,6 +420,7 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
+	guard := c.newMemGuard()
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -421,6 +430,8 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
+	stopGuard := guard.watch(cmd.Process)
+
 	// Parse progress from stderr
 	if progressCb != nil {
 		ffmpegProgress(stderr, duration, progressCb)
@@ -428,7 +439,11 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 		io.Copy(io.Discard, stderr)
 	}
 
-	if err := cmd.Wait(); err != nil {
+	waitErr := cmd.Wait()
+	if err := stopGuard(); err != nil {
+		return err
+	}
+	if err := waitErr; err != nil {
 		c.log.Error().Msg("libplacebo transcode failed")
 		return fmt.Errorf("ffmpeg libplacebo transcode failed: %w", err)
 	}
