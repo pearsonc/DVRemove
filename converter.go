@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/rs/zerolog"
 )
@@ -42,6 +43,47 @@ type Converter struct {
 	transcode TranscodeConfig
 	gpuDetect *GPUDetector
 	log       zerolog.Logger
+	tempDir   string // where temporary files go; empty means the OS default
+	// freeSpace reports the bytes available to a non-root user on dir's filesystem.
+	freeSpace func(dir string) (uint64, error)
+}
+
+// SetTempDir sets the directory temporary files are created in; empty means the OS default.
+func (c *Converter) SetTempDir(dir string) { c.tempDir = dir }
+
+func diskFree(dir string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil
+}
+
+// makeTempDir creates a conversion's temporary directory under temp_dir, or the OS default
+// when it is unset, after checking that the filesystem holds twice the input's size.
+func (c *Converter) makeTempDir(inputPath string) (string, error) {
+	parent := c.tempDir
+	if parent == "" {
+		parent = os.TempDir()
+	}
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat input %s: %w", inputPath, err)
+	}
+	needed := uint64(info.Size()) * 2
+	free, err := c.freeSpace(parent)
+	if err != nil {
+		return "", fmt.Errorf("failed to read free space on %s: %w", parent, err)
+	}
+	if free < needed {
+		return "", fmt.Errorf("not enough free space on %s: %d bytes free, %d bytes needed (twice the input size %d)",
+			parent, free, needed, info.Size())
+	}
+	dir, err := os.MkdirTemp(parent, "dvremove-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	return dir, nil
 }
 
 // NewConverter creates a new Converter instance.
@@ -53,6 +95,7 @@ func NewConverter(inputDir, outputDir string, transcode TranscodeConfig, log zer
 		transcode: transcode,
 		gpuDetect: NewGPUDetector(transcode.VAAPIDevice, log),
 		log:       componentLog,
+		freeSpace: diskFree,
 	}
 }
 
@@ -140,9 +183,9 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 	}
 
 	// Create unique temp directory for this conversion
-	tempDir, err := os.MkdirTemp("", "dvremove-*")
+	tempDir, err := c.makeTempDir(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return err
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -317,9 +360,9 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 	}
 
 	// Create unique temp directory for this conversion
-	tempDir, err := os.MkdirTemp("", "dvremove-*")
+	tempDir, err := c.makeTempDir(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return err
 	}
 	defer os.RemoveAll(tempDir)
 

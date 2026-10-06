@@ -42,6 +42,7 @@ func main() {
 	}
 
 	converter := NewConverter(cfg.InputDir, cfg.OutputDir, cfg.Transcode, log)
+	converter.SetTempDir(cfg.TempDir)
 	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)
 
 	// Process any existing files

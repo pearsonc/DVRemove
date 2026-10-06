@@ -28,6 +28,7 @@ type Config struct {
 	InputDir  string          `yaml:"input_dir"`
 	OutputDir string          `yaml:"output_dir"`
 	LogDir    string          `yaml:"log_dir"`
+	TempDir   string          `yaml:"temp_dir"` // where temporary files go; empty means the OS default
 	Transcode TranscodeConfig `yaml:"transcode"`
 	Parallel  ParallelConfig  `yaml:"parallel"`
 }

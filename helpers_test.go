@@ -19,14 +19,14 @@ func stubTools(t *testing.T, profile string) (logPath string) {
 		t.Fatal(err)
 	}
 	const record = "echo \"$(basename \"$0\") $*\" >> \"$STUB_LOG\"\n"
-	const touchO = "prev=; for a in \"$@\"; do [ \"$prev\" = -o ] && : > \"$a\"; prev=$a; done\n"
+	const touchO = "prev=; for a in \"$@\"; do [ \"$prev\" = -o ] && : > \"$a\"; prev=$a; done; exit 0\n"
 	scripts := map[string]string{
 		"mediainfo": record + "echo '{\"media\":{\"track\":[{\"@type\":\"Video\",\"HDR_Format\":\"Dolby Vision\",\"HDR_Format_Profile\":\"'\"$STUB_PROFILE\"'\"}]}}'\n",
 		"ffprobe":   record + "echo 60\n",
 		"ffmpeg": record +
 			"case \"$*\" in *-filters*) echo ' libplacebo';; *-encoders*) ;; esac\n" +
 			"for a in \"$@\"; do last=$a; done\n" +
-			"case \"$*\" in *-filters*|*-encoders*) ;; *) [ \"$last\" != - ] && : > \"$last\";; esac\n",
+			"case \"$*\" in *-filters*|*-encoders*) ;; *) [ \"$last\" != - ] && : > \"$last\";; esac; exit 0\n",
 		"dovi_tool": record + touchO,
 		"mkvmerge":  record + touchO,
 	}
