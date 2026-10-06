@@ -167,7 +167,16 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 	c.log.Info().Str("file", filename).Str("profile", profile.String()).Msg("detected profile")
 
 	if profile == Profile5 || profile == Profile7 {
+		// A size mediainfo does not report is a refusal, not a pass (H16, D21).
+		if width == 0 || height == 0 {
+			return fmt.Errorf("refusing %s: mediainfo reported no video size (%dx%d)", filename, width, height)
+		}
 		if err := refuseAboveUHD(filename, width, height); err != nil {
+			return err
+		}
+		// A name already taken is refused before any work (H11); publishing checks again,
+		// since the name can be taken during the run.
+		if err := outputNamesFree(filepath.Join(c.outputDir, filename)); err != nil {
 			return err
 		}
 	}
