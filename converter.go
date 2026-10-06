@@ -97,7 +97,7 @@ func (c *Converter) DetectProfile(filePath string) (DVProfile, error) {
 	return profile, err
 }
 
-// probeVideo returns a file's DV profile and the width and height of its Dolby Vision video,
+// probeVideo returns a file's DV profile and the largest width and height of its video tracks,
 // which are 0 where mediainfo reports none.
 func (c *Converter) probeVideo(filePath string) (profile DVProfile, width, height int, err error) {
 	c.log.Debug().Str("file", filePath).Msg("detecting DV profile")
@@ -113,32 +113,34 @@ func (c *Converter) probeVideo(filePath string) (profile DVProfile, width, heigh
 		return ProfileUnknown, 0, 0, fmt.Errorf("failed to parse mediainfo output for %s: %w", filePath, err)
 	}
 
+	// ffmpeg's default selection takes the largest video track, whichever one carries the
+	// Dolby Vision, so the size is the largest over every video track (H16).
+	profile = ProfileUnknown
 	for _, track := range info.Media.Track {
 		if track.Type != "Video" {
 			continue
 		}
-
-		if !strings.Contains(track.HDRFormat, "Dolby Vision") {
-			continue
-		}
-
-		profileStr := track.HDRFormatProfile
 		w, _ := strconv.Atoi(track.Width)
 		h, _ := strconv.Atoi(track.Height)
+		width, height = max(width, w), max(height, h)
+
+		if profile != ProfileUnknown || !strings.Contains(track.HDRFormat, "Dolby Vision") {
+			continue
+		}
+		profileStr := track.HDRFormatProfile
 		c.log.Debug().Str("file", filePath).Str("profile", profileStr).Msg("found DV profile string")
 
-		if strings.Contains(profileStr, "dvhe.05") || strings.Contains(profileStr, "Profile 5") {
-			return Profile5, w, h, nil
-		}
-		if strings.Contains(profileStr, "dvhe.07") || strings.Contains(profileStr, "Profile 7") {
-			return Profile7, w, h, nil
-		}
-		if strings.Contains(profileStr, "dvhe.08") || strings.Contains(profileStr, "Profile 8") {
-			return Profile8, w, h, nil
+		switch {
+		case strings.Contains(profileStr, "dvhe.05") || strings.Contains(profileStr, "Profile 5"):
+			profile = Profile5
+		case strings.Contains(profileStr, "dvhe.07") || strings.Contains(profileStr, "Profile 7"):
+			profile = Profile7
+		case strings.Contains(profileStr, "dvhe.08") || strings.Contains(profileStr, "Profile 8"):
+			profile = Profile8
 		}
 	}
 
-	return ProfileUnknown, 0, 0, nil
+	return profile, width, height, nil
 }
 
 // Convert processes a single file and converts it to Profile 8.1.
