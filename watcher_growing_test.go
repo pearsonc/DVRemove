@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,9 +23,12 @@ func TestGrowingInputIsSkipped(t *testing.T) {
 	c.SetTempDir(t.TempDir())
 	w := NewWatcher(in, c, 1, nil, zerolog.New(logs))
 
+	var mu sync.Mutex // the checks run concurrently
 	var intervals []time.Duration
 	w.stableInterval = 7 * time.Millisecond
 	w.sleep = func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
 		intervals = append(intervals, d)
 		f, err := os.OpenFile(growing, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil {
