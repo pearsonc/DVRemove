@@ -28,7 +28,8 @@ type Config struct {
 	InputDir  string          `yaml:"input_dir"`
 	OutputDir string          `yaml:"output_dir"`
 	LogDir    string          `yaml:"log_dir"`
-	TempDir   string          `yaml:"temp_dir"` // where temporary files go; empty means the OS default
+	TempDir   string          `yaml:"temp_dir"`  // where temporary files go; empty means the OS default
+	StateDir  string          `yaml:"state_dir"` // holds journal.txt; empty means log_dir
 	Transcode TranscodeConfig `yaml:"transcode"`
 	Parallel  ParallelConfig  `yaml:"parallel"`
 
@@ -61,6 +62,9 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func (c *Config) setDefaults() {
+	if c.StateDir == "" {
+		c.StateDir = c.LogDir
+	}
 	if c.Transcode.Encoder == "" {
 		c.Transcode.Encoder = "auto"
 	}
@@ -89,14 +93,23 @@ func (c *Config) validate() error {
 		return fmt.Errorf("log_dir is required")
 	}
 
-	// Verify directories exist
-	for _, dir := range []string{c.InputDir, c.OutputDir, c.LogDir} {
+	// The input and output folders are the NAS shares, so their absence is an error to report.
+	// The state, log and temp folders belong to dvremove, and a first run creates them.
+	for _, dir := range []string{c.InputDir, c.OutputDir} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			return fmt.Errorf("directory %s does not exist: %w", dir, err)
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("%s is not a directory", dir)
+		}
+	}
+	for _, dir := range []string{c.StateDir, c.LogDir, c.TempDir} {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 

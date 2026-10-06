@@ -35,6 +35,18 @@ func main() {
 		Bool("one_shot", *oneShot).
 		Msg("dvremove starting")
 
+	// Remove what a killed run left behind (H9), before anything new is made. Whatever stops two
+	// runs overlapping must come before this line, or it removes a live run's files.
+	journal := NewJournal(filepath.Join(cfg.StateDir, "journal.txt"))
+	tempRoot := cfg.TempDir
+	if tempRoot == "" {
+		tempRoot = os.TempDir()
+	}
+	if err := RecoverJournal(journal, tempRoot, cfg.OutputDir, log); err != nil {
+		log.Error().Err(err).Msg("failed to clear the journal at start-up")
+		os.Exit(1)
+	}
+
 	// Create UI unless disabled
 	var ui *UI
 	if !*noUI {
@@ -43,6 +55,7 @@ func main() {
 
 	converter := NewConverter(cfg.InputDir, cfg.OutputDir, cfg.Transcode, log)
 	converter.SetTempDir(cfg.TempDir)
+	converter.SetJournal(journal)
 	converter.SetGuardLimits(cfg.GuardMinAvailableMiB, cfg.GuardMaxSwapGrowthMiB)
 	logRunStart(log, cfg.TempDir, cfg.OutputDir, diskFree)
 	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)
