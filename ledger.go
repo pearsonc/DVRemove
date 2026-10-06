@@ -19,7 +19,8 @@ import (
 // a hand edit that leaves no final newline still skips its title. A line cut short before its tab
 // or inside its name names nothing, because inputs are .mkv files and a cut name does not end
 // so. The one name that slips through is a cut that lands exactly on a shorter .mkv name. Add
-// appends a newline first so the next line never joins a cut line.
+// appends a newline first so the next line never joins a cut line. A line ending CRLF, as a
+// Windows editor leaves it, matches as if it ended LF, since no name carries a carriage return.
 type Ledger struct {
 	path string
 	mu   sync.Mutex
@@ -48,12 +49,12 @@ func (l *Ledger) Has(name string, size int64) (bool, error) {
 			// A last line with no newline counts when it is a whole line for an .mkv, which is
 			// how an editor leaves a hand-trimmed ledger (H5). A cut anywhere before the
 			// extension, or before the tab, is not.
-			return line == want && strings.HasSuffix(strings.ToLower(name), ".mkv"), nil
+			return strings.TrimSuffix(line, "\r") == want && strings.HasSuffix(strings.ToLower(name), ".mkv"), nil
 		}
 		if err != nil {
 			return false, fmt.Errorf("failed to read ledger %s: %w", l.path, err)
 		}
-		if strings.TrimSuffix(line, "\n") == want {
+		if strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r") == want {
 			return true, nil
 		}
 	}

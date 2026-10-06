@@ -70,6 +70,7 @@ func (w *Watcher) ProcessExisting() error {
 
 	// Collect MKV files
 	var files []string
+	unreadable := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -77,15 +78,30 @@ func (w *Watcher) ProcessExisting() error {
 		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".mkv") {
 			continue
 		}
-		files = append(files, filepath.Join(w.inputDir, entry.Name()))
+		path := filepath.Join(w.inputDir, entry.Name())
+		regular, err := isRegularFile(path)
+		if err != nil {
+			w.log.Error().Err(err).Str("file", entry.Name()).Msg("could not stat the input, it was not converted")
+			unreadable++
+			continue
+		}
+		if !regular {
+			w.log.Warn().Str("file", entry.Name()).Msg("not a regular file, skipping it without opening it")
+			continue
+		}
+		files = append(files, path)
 	}
 
-	files = w.dropGrowing(files)
+	files, unchecked := w.dropGrowing(files)
+	unreadable += unchecked
 
 	if len(files) == 0 {
 		w.log.Info().Msg("no files to process")
 		if w.ui != nil {
 			w.ui.PrintInfo("No files to process")
+		}
+		if unreadable > 0 {
+			return &BatchError{Failed: unreadable, Total: unreadable}
 		}
 		return nil
 	}
@@ -121,16 +137,29 @@ func (w *Watcher) ProcessExisting() error {
 	}
 
 	w.log.Info().Int("processed", processed).Int("failed", failed).Msg("batch complete")
-	if failed > 0 {
-		return &BatchError{Failed: failed, Total: processed}
+	if failed+unreadable > 0 {
+		return &BatchError{Failed: failed + unreadable, Total: processed + unreadable}
 	}
 	return nil
 }
 
+// isRegularFile reports whether path, followed through a link, is a regular file. A FIFO, a
+// socket or a device named *.mkv is not a candidate (H1), and the stat does not open it.
+func isRegularFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
+}
+
 // dropGrowing removes from files each whose size changes during the stability check (H7). A
-// skipped file stays in the input folder for the next run, and is not a failure.
-func (w *Watcher) dropGrowing(files []string) []string {
+// file still growing stays in the input folder for the next run, and is not a failure. A file
+// whose size or bytes can't be read is a failure under D21: it is logged, left out, and counted
+// in the second result (H2).
+func (w *Watcher) dropGrowing(files []string) ([]string, int) {
 	growing := make([]bool, len(files))
+	failed := make([]bool, len(files))
 	var wg sync.WaitGroup
 	for i, f := range files {
 		wg.Add(1)
@@ -138,7 +167,8 @@ func (w *Watcher) dropGrowing(files []string) []string {
 			defer wg.Done()
 			grown, err := w.isGrowing(f)
 			if err != nil {
-				w.log.Warn().Err(err).Str("file", filepath.Base(f)).Msg("could not check the file's size, skipping it")
+				w.log.Error().Err(err).Str("file", filepath.Base(f)).Msg("could not read the file to check its size, it was not converted")
+				failed[i] = true
 				grown = true
 			} else if grown {
 				w.log.Info().Str("file", filepath.Base(f)).Msg("file is still growing, skipping it until the next run")
@@ -148,12 +178,16 @@ func (w *Watcher) dropGrowing(files []string) []string {
 	}
 	wg.Wait()
 	var steady []string
+	unreadable := 0
 	for i, f := range files {
+		if failed[i] {
+			unreadable++
+		}
 		if !growing[i] {
 			steady = append(steady, f)
 		}
 	}
-	return steady
+	return steady, unreadable
 }
 
 // isGrowing reports whether the file changes across stableChecks waits: in size, in its
@@ -190,10 +224,23 @@ type fileState struct {
 	sample       [sha256.Size]byte
 }
 
+// statTimes returns a file's modification and change times in nanoseconds. It is a variable so
+// a test can hold the times still, as a coarse network filesystem does, and so reach the sampled
+// bytes alone, or move one time alone.
+var statTimes = func(info os.FileInfo) (mtime, ctime int64) {
+	mtime = info.ModTime().UnixNano()
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+		ctime = sys.Ctim.Nano()
+	}
+	return mtime, ctime
+}
+
 // fingerprint reads a file's size, times and a hash of sampled blocks. On a CIFS mount the times
 // may be coarse, so a write that moves none of them is seen only if it lands in a sampled block.
 func fingerprint(path string) (fileState, error) {
-	f, err := os.Open(path)
+	// O_NONBLOCK so that a FIFO swapped in for the file after the stat of isRegularFile opens
+	// without waiting for a writer; it changes nothing for a regular file.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fileState{}, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -202,10 +249,11 @@ func fingerprint(path string) (fileState, error) {
 	if err != nil {
 		return fileState{}, fmt.Errorf("failed to stat file: %w", err)
 	}
-	st := fileState{size: info.Size(), mtime: info.ModTime().UnixNano()}
-	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-		st.ctime = sys.Ctim.Nano()
+	if !info.Mode().IsRegular() {
+		return fileState{}, fmt.Errorf("%s is not a regular file", path)
 	}
+	st := fileState{size: info.Size()}
+	st.mtime, st.ctime = statTimes(info)
 	h := sha256.New()
 	buf := make([]byte, sampleBlock)
 	for i := 0; i <= sampleSpots; i++ {
@@ -265,6 +313,12 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 
 	// Only process MKV files
 	if !strings.HasSuffix(strings.ToLower(event.Name), ".mkv") {
+		return
+	}
+
+	// Only regular files (H1): a FIFO or device named *.mkv is skipped, unopened.
+	if regular, err := isRegularFile(event.Name); err == nil && !regular {
+		w.log.Warn().Str("file", event.Name).Msg("not a regular file, skipping it without opening it")
 		return
 	}
 
