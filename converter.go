@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/rs/zerolog"
@@ -213,6 +214,9 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 	return nil
 }
 
+// stderrLogLimit bounds the stderr of one tool held in memory and written to the log.
+const stderrLogLimit = 64 << 10
+
 // extractAndConvert extracts the HEVC stream and converts DV metadata.
 func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVProfile) error {
 	c.log.Debug().Str("input", inputPath).Str("output", outputPath).Msg("extracting and converting HEVC")
@@ -258,19 +262,22 @@ func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVPr
 		return fmt.Errorf("failed to start dovi_tool: %w", err)
 	}
 
-	// Read stderr in background
-	go func() {
-		stderrBytes, _ := io.ReadAll(ffmpegStderr)
-		if len(stderrBytes) > 0 {
-			c.log.Debug().Str("source", "ffmpeg").Msg(string(stderrBytes))
-		}
-	}()
-	go func() {
-		stderrBytes, _ := io.ReadAll(doviStderr)
-		if len(stderrBytes) > 0 {
-			c.log.Debug().Str("source", "dovi_tool").Msg(string(stderrBytes))
-		}
-	}()
+	// Drain both stderr pipes to their end in the background, keeping only a bounded tail for the
+	// log, and finish reading before Wait, which closes the pipes.
+	var drained sync.WaitGroup
+	for _, src := range []struct {
+		name string
+		pipe io.Reader
+	}{{"ffmpeg", ffmpegStderr}, {"dovi_tool", doviStderr}} {
+		drained.Add(1)
+		go func(name string, pipe io.Reader) {
+			defer drained.Done()
+			if tail := tailCapture(pipe, stderrLogLimit); len(tail) > 0 {
+				c.log.Debug().Str("source", name).Msg(string(tail))
+			}
+		}(src.name, src.pipe)
+	}
+	drained.Wait()
 
 	// Wait for both to complete
 	ffmpegErr := ffmpegCmd.Wait()

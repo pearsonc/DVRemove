@@ -13,13 +13,13 @@ import (
 
 // Progress represents ffmpeg encoding progress.
 type Progress struct {
-	Percent  int
-	Speed    string
-	ETA      string
-	Frame    int
-	Fps      float64
-	Time     time.Duration
-	Bitrate  string
+	Percent int
+	Speed   string
+	ETA     string
+	Frame   int
+	Fps     float64
+	Time    time.Duration
+	Bitrate string
 }
 
 // ProgressCallback is called with progress updates during encoding.
@@ -28,8 +28,7 @@ type ProgressCallback func(Progress)
 // ffmpegProgress parses ffmpeg stderr for progress information.
 // Returns channel that receives progress updates.
 func ffmpegProgress(stderr io.Reader, totalDuration time.Duration, callback ProgressCallback) {
-	scanner := bufio.NewScanner(stderr)
-	scanner.Split(scanFFmpegLines)
+	reader := bufio.NewReader(stderr)
 
 	// Regex patterns for ffmpeg output
 	timeRe := regexp.MustCompile(`time=(\d+):(\d+):(\d+)\.(\d+)`)
@@ -38,8 +37,11 @@ func ffmpegProgress(stderr io.Reader, totalDuration time.Duration, callback Prog
 	fpsRe := regexp.MustCompile(`fps=\s*([0-9.]+)`)
 	bitrateRe := regexp.MustCompile(`bitrate=\s*([0-9.]+\s*[kMG]?bits/s)`)
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		line, ok := readFFmpegLine(reader)
+		if !ok {
+			return
+		}
 		if !strings.Contains(line, "time=") {
 			continue
 		}
@@ -100,26 +102,47 @@ func ffmpegProgress(stderr io.Reader, totalDuration time.Duration, callback Prog
 	}
 }
 
-// scanFFmpegLines is a split function for bufio.Scanner that handles ffmpeg's carriage return output.
-func scanFFmpegLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
+// maxProgressLine caps what is held of one stderr line; the rest of a longer line is read and dropped.
+const maxProgressLine = 64 << 10
 
-	// Look for \r or \n
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\r' || data[i] == '\n' {
-			return i + 1, data[:i], nil
+// readFFmpegLine returns the next line of ffmpeg's stderr, ending at \r or \n, holding at most
+// maxProgressLine bytes of it. It reads a longer line to its end, so the writer never blocks on
+// an unread pipe. ok is false once the input is exhausted and nothing is left.
+func readFFmpegLine(r *bufio.Reader) (line string, ok bool) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return string(buf), len(buf) > 0
+		}
+		if b == '\r' || b == '\n' {
+			return string(buf), true
+		}
+		if len(buf) < maxProgressLine {
+			buf = append(buf, b)
 		}
 	}
+}
 
-	// If at EOF, return what we have
-	if atEOF {
-		return len(data), data, nil
+// tailCapture reads r to its end and returns the last max bytes of it. The whole stream is
+// drained, so the writer never blocks, and what is held in memory stays bounded.
+func tailCapture(r io.Reader, max int) []byte {
+	var tail []byte
+	chunk := make([]byte, 32<<10)
+	for {
+		n, err := r.Read(chunk)
+		tail = append(tail, chunk[:n]...)
+		if len(tail) > 2*max {
+			tail = append(tail[:0], tail[len(tail)-max:]...)
+		}
+		if err != nil {
+			break
+		}
 	}
-
-	// Request more data
-	return 0, nil, nil
+	if len(tail) > max {
+		tail = tail[len(tail)-max:]
+	}
+	return tail
 }
 
 // formatETA formats a duration as MM:SS or HH:MM:SS.
