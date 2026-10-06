@@ -46,11 +46,16 @@ func main() {
 	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)
 
 	// Process any existing files
-	if err := watcher.ProcessExisting(); err != nil {
-		log.Error().Err(err).Msg("failed to process existing files")
+	batchErr := watcher.ProcessExisting()
+	if batchErr != nil {
+		log.Error().Err(batchErr).Msg("failed to process existing files")
 	}
 
 	if *oneShot {
+		if batchErr != nil {
+			log.Info().Msg("one-shot mode, exiting with failures")
+			os.Exit(1)
+		}
 		log.Info().Msg("one-shot mode, exiting")
 		return
 	}

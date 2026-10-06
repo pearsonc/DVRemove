@@ -33,8 +33,18 @@ func NewWatcher(inputDir string, converter *Converter, maxWorkers int, ui *UI, l
 	}
 }
 
+// BatchError reports a batch in which some files were left unconverted.
+type BatchError struct {
+	Failed, Total int
+}
+
+func (e *BatchError) Error() string {
+	return fmt.Sprintf("%d of %d files were not converted", e.Failed, e.Total)
+}
+
 // ProcessExisting converts any MKV files already in the input directory.
 // Reads directory once, submits all jobs to worker pool, waits for completion.
+// It returns a *BatchError when any conversion failed.
 func (w *Watcher) ProcessExisting() error {
 	entries, err := os.ReadDir(w.inputDir)
 	if err != nil {
@@ -92,6 +102,9 @@ func (w *Watcher) ProcessExisting() error {
 	}
 
 	w.log.Info().Int("processed", processed).Int("failed", failed).Msg("batch complete")
+	if failed > 0 {
+		return &BatchError{Failed: failed, Total: processed}
+	}
 	return nil
 }
 
