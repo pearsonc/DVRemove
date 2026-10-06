@@ -1,11 +1,57 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 )
+
+// tempPrefix starts the name of every temporary directory dvremove makes.
+const tempPrefix = "dvremove-"
+
+// SetJournal sets the journal every temporary directory and .partial is recorded in before it is
+// created (H9). main always sets one; a converter without one records nothing.
+func (c *Converter) SetJournal(j *Journal) { c.journal = j }
+
+// record journals path ahead of its creation.
+func (c *Converter) record(path string) error {
+	if c.journal == nil {
+		return nil
+	}
+	return c.journal.Add(path)
+}
+
+// forget drops path from the journal once dvremove has removed it itself.
+func (c *Converter) forget(path string) {
+	if c.journal == nil {
+		return
+	}
+	if err := c.journal.Remove(path); err != nil {
+		c.log.Warn().Err(err).Str("path", path).Msg("failed to drop a removed path from the journal")
+	}
+}
+
+// removeTemp removes a temporary directory and, once it is gone, its journal entry.
+func (c *Converter) removeTemp(dir string) {
+	if err := os.RemoveAll(dir); err != nil {
+		c.log.Warn().Err(err).Str("path", dir).Msg("failed to remove temporary directory, the journal keeps it")
+		return
+	}
+	c.forget(dir)
+}
+
+// discardPartial removes a partial, or finds it already renamed away, and drops its journal entry.
+func (c *Converter) discardPartial(partial string) {
+	if err := os.Remove(partial); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.log.Warn().Err(err).Str("path", partial).Msg("failed to remove partial output, the journal keeps it")
+		return
+	}
+	c.forget(partial)
+}
 
 // partialSuffix ends the name of an output while it is being written. dvremove renames it away
 // only once the mux has succeeded, so a failed or killed conversion leaves no final name (H6).
@@ -26,15 +72,14 @@ func (c *Converter) writeOutput(final string, mux func(partial string) error) er
 	if _, err := os.Lstat(partial); err == nil {
 		return fmt.Errorf("a file already stands at %s, not overwriting it", partial)
 	}
+	if err := c.record(partial); err != nil {
+		return err
+	}
+	defer c.discardPartial(partial)
 	if err := mux(partial); err != nil {
-		os.Remove(partial)
 		return err
 	}
-	if err := publishOutput(partial, final); err != nil {
-		os.Remove(partial)
-		return err
-	}
-	return nil
+	return publishOutput(partial, final)
 }
 
 // outputFree returns an error naming final if anything stands at that name.
@@ -93,8 +138,16 @@ func (c *Converter) makeTempDir(inputPath string) (string, error) {
 		return "", fmt.Errorf("not enough free space on %s: %d bytes free, %d bytes needed (twice the input size %d)",
 			parent, free, needed, info.Size())
 	}
-	dir, err := os.MkdirTemp(parent, "dvremove-*")
-	if err != nil {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("failed to name temp directory: %w", err)
+	}
+	dir := filepath.Join(parent, tempPrefix+hex.EncodeToString(suffix[:]))
+	if err := c.record(dir); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		c.forget(dir)
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	return dir, nil

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -48,6 +47,7 @@ type Converter struct {
 	tempDir   string // where temporary files go; empty means the OS default
 	// freeSpace reports the bytes available to a non-root user on dir's filesystem.
 	freeSpace func(dir string) (uint64, error)
+	journal   *Journal // paths recorded before they are created; nil records nothing
 	guardSettings
 }
 
@@ -182,7 +182,7 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tempDir)
+	defer c.removeTemp(tempDir)
 
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
 	tempHEVC := filepath.Join(tempDir, baseName+".hevc")
@@ -372,7 +372,7 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tempDir)
+	defer c.removeTemp(tempDir)
 
 	transcodedVideo := filepath.Join(tempDir, baseName+".transcoded.mkv")
 
