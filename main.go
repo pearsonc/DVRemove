@@ -35,8 +35,15 @@ func main() {
 		Bool("one_shot", *oneShot).
 		Msg("dvremove starting")
 
-	// Remove what a killed run left behind (H9), before anything new is made. Whatever stops two
-	// runs overlapping must come before this line, or it removes a live run's files.
+	// Take the run lock before anything else touches a file (H12): a refused run must not remove
+	// the files of the run that holds it. The lock lives until the process exits.
+	if _, err := AcquireLock(filepath.Join(cfg.StateDir, "dvremove.lock")); err != nil {
+		log.Error().Err(err).Msg("refusing to start")
+		os.Exit(1)
+	}
+
+	// Remove what a killed run left behind (H9), before anything new is made. Nothing above
+	// this line may be removed from before the lock, or a refused run removes a live run's files.
 	journal := NewJournal(filepath.Join(cfg.StateDir, "journal.txt"))
 	tempRoot := cfg.TempDir
 	if tempRoot == "" {
