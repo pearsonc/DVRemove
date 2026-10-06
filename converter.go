@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -245,16 +246,27 @@ func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVPr
 
 	doviCmd := exec.Command("dovi_tool", doviArgs...)
 
-	// Pipe ffmpeg output to dovi_tool input
-	pipe, err := ffmpegCmd.StdoutPipe()
+	// The pipe between them is made here, not by StdoutPipe, so the parent can close both of its
+	// ends once the children hold theirs. A parent that kept the read end would leave ffmpeg
+	// blocked on a full pipe after dovi_tool exited, instead of failing on the closed one (H1).
+	pipeR, pipeW, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("failed to create ffmpeg stdout pipe: %w", err)
+		return fmt.Errorf("failed to create the ffmpeg to dovi_tool pipe: %w", err)
 	}
-	doviCmd.Stdin = pipe
+	defer pipeR.Close()
+	defer pipeW.Close()
+	ffmpegCmd.Stdout = pipeW
+	doviCmd.Stdin = pipeR
 
 	// Capture stderr for error messages
-	ffmpegStderr, _ := ffmpegCmd.StderrPipe()
-	doviStderr, _ := doviCmd.StderrPipe()
+	ffmpegStderr, err := ffmpegCmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create ffmpeg stderr pipe: %w", err)
+	}
+	doviStderr, err := doviCmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create dovi_tool stderr pipe: %w", err)
+	}
 
 	// Start both commands
 	guard := c.newMemGuard()
@@ -263,34 +275,52 @@ func (c *Converter) extractAndConvert(inputPath, outputPath string, profile DVPr
 	}
 	if err := doviCmd.Start(); err != nil {
 		ffmpegCmd.Process.Kill()
+		ffmpegCmd.Wait()
 		return fmt.Errorf("failed to start dovi_tool: %w", err)
 	}
+	pipeR.Close()
+	pipeW.Close()
 
-	// Drain both stderr pipes to their end in the background, keeping only a bounded tail for the
-	// log, and finish reading before Wait, which closes the pipes.
-	var drained sync.WaitGroup
-	for _, src := range []struct {
-		name string
-		pipe io.Reader
-	}{{"ffmpeg", ffmpegStderr}, {"dovi_tool", doviStderr}} {
-		drained.Add(1)
-		go func(name string, pipe io.Reader) {
-			defer drained.Done()
-			if tail := tailCapture(pipe, stderrLogLimit); len(tail) > 0 {
-				c.log.Debug().Str("source", name).Msg(string(tail))
-			}
-		}(src.name, src.pipe)
-	}
 	stopGuard := guard.watch(ffmpegCmd.Process, doviCmd.Process)
-	drained.Wait()
 
-	// Wait for both to complete
-	ffmpegErr := ffmpegCmd.Wait()
-	doviErr := doviCmd.Wait()
+	// Each command's stderr is drained to its end, keeping only a bounded tail for the log,
+	// before its Wait, which closes the pipe. The first command to fail ends the other, so no
+	// process of the pipeline outlives the failure.
+	var finished sync.WaitGroup
+	var ffmpegErr, doviErr error
+	var failOnce sync.Once
+	var failedFirst string
+	for _, p := range []struct {
+		name   string
+		cmd    *exec.Cmd
+		other  *exec.Cmd
+		stderr io.Reader
+		result *error
+	}{
+		{"ffmpeg", ffmpegCmd, doviCmd, ffmpegStderr, &ffmpegErr},
+		{"dovi_tool", doviCmd, ffmpegCmd, doviStderr, &doviErr},
+	} {
+		finished.Add(1)
+		go func() {
+			defer finished.Done()
+			if tail := tailCapture(p.stderr, stderrLogLimit); len(tail) > 0 {
+				c.log.Debug().Str("source", p.name).Msg(string(tail))
+			}
+			if *p.result = p.cmd.Wait(); *p.result != nil {
+				failOnce.Do(func() { failedFirst = p.name })
+				p.other.Process.Kill()
+			}
+		}()
+	}
+	finished.Wait()
 	if err := stopGuard(); err != nil {
 		return err
 	}
 
+	// Report the command that failed first: the other may only have been killed because of it.
+	if failedFirst == "dovi_tool" && doviErr != nil {
+		return fmt.Errorf("dovi_tool failed: %w", doviErr)
+	}
 	if ffmpegErr != nil {
 		return fmt.Errorf("ffmpeg failed: %w", ffmpegErr)
 	}
