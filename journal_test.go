@@ -37,6 +37,10 @@ func TestStartClearsJournalledState(t *testing.T) {
 	// Each of these is journalled and must survive, as must the unjournalled partial.
 	unjournalled := mustWrite(t, filepath.Join(out, "other.mkv.partial"), "x")
 	wrongName := mustWrite(t, filepath.Join(temp, "keep.txt"), "x")
+	wrongDir := filepath.Join(temp, "library")
+	if err := os.Mkdir(wrongDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	finished := mustWrite(t, filepath.Join(out, "film.mkv"), "x")
 	outside := filepath.Join(elsewhere, "dvremove-outside")
 	if err := os.Mkdir(outside, 0o755); err != nil {
@@ -55,7 +59,7 @@ func TestStartClearsJournalledState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, p := range []string{dir, partial, wrongName, finished, outside, outsidePartial, link, dotdot, partialInTemp, dirNamedPartial} {
+	for _, p := range []string{dir, partial, wrongName, wrongDir, finished, outside, outsidePartial, link, dotdot, partialInTemp, dirNamedPartial} {
 		if err := j.Add(p); err != nil {
 			t.Fatal(err)
 		}
@@ -69,7 +73,7 @@ func TestStartClearsJournalledState(t *testing.T) {
 			t.Errorf("journalled %s was not removed", gone)
 		}
 	}
-	for _, kept := range []string{unjournalled, wrongName, finished, outside, outsidePartial, link, target, partialInTemp, dirNamedPartial} {
+	for _, kept := range []string{unjournalled, wrongName, wrongDir, finished, outside, outsidePartial, link, target, partialInTemp, dirNamedPartial} {
 		if !exists(kept) {
 			t.Errorf("%s was removed", kept)
 		}
