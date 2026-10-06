@@ -20,7 +20,17 @@ type Watcher struct {
 	ui         *UI
 	log        zerolog.Logger
 	processing sync.Map // Track files currently being processed
+
+	// stableInterval is the wait between size checks, and sleep performs it; a test injects both
+	// so the check does not wait real seconds.
+	stableInterval time.Duration
+	sleep          func(time.Duration)
 }
+
+const (
+	defaultStableInterval = time.Second
+	stableChecks          = 3 // size checks, one interval apart, a file must survive unchanged
+)
 
 // NewWatcher creates a new Watcher instance.
 func NewWatcher(inputDir string, converter *Converter, maxWorkers int, ui *UI, log zerolog.Logger) *Watcher {
@@ -30,6 +40,9 @@ func NewWatcher(inputDir string, converter *Converter, maxWorkers int, ui *UI, l
 		maxWorkers: maxWorkers,
 		ui:         ui,
 		log:        log.With().Str("component", "watcher").Logger(),
+
+		stableInterval: defaultStableInterval,
+		sleep:          time.Sleep,
 	}
 }
 
@@ -62,6 +75,8 @@ func (w *Watcher) ProcessExisting() error {
 		}
 		files = append(files, filepath.Join(w.inputDir, entry.Name()))
 	}
+
+	files = w.dropGrowing(files)
 
 	if len(files) == 0 {
 		w.log.Info().Msg("no files to process")
@@ -106,6 +121,55 @@ func (w *Watcher) ProcessExisting() error {
 		return &BatchError{Failed: failed, Total: processed}
 	}
 	return nil
+}
+
+// dropGrowing removes from files each whose size changes during the stability check (H7). A
+// skipped file stays in the input folder for the next run, and is not a failure.
+func (w *Watcher) dropGrowing(files []string) []string {
+	growing := make([]bool, len(files))
+	var wg sync.WaitGroup
+	for i, f := range files {
+		wg.Add(1)
+		go func(i int, f string) {
+			defer wg.Done()
+			grown, err := w.isGrowing(f)
+			if err != nil {
+				w.log.Warn().Err(err).Str("file", filepath.Base(f)).Msg("could not check the file's size, skipping it")
+				grown = true
+			} else if grown {
+				w.log.Info().Str("file", filepath.Base(f)).Msg("file is still growing, skipping it until the next run")
+			}
+			growing[i] = grown
+		}(i, f)
+	}
+	wg.Wait()
+	var steady []string
+	for i, f := range files {
+		if !growing[i] {
+			steady = append(steady, f)
+		}
+	}
+	return steady
+}
+
+// isGrowing reports whether the file's size changes across stableChecks waits.
+func (w *Watcher) isGrowing(filePath string) (bool, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat file: %w", err)
+	}
+	size := info.Size()
+	for i := 0; i < stableChecks; i++ {
+		w.sleep(w.stableInterval)
+		info, err := os.Stat(filePath)
+		if err != nil {
+			return false, fmt.Errorf("failed to stat file: %w", err)
+		}
+		if info.Size() != size {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Watch starts watching the input directory for new files.
@@ -194,7 +258,7 @@ func (w *Watcher) waitForStable(filePath string) error {
 			lastSize = currentSize
 		}
 
-		time.Sleep(1 * time.Second)
+		w.sleep(w.stableInterval)
 	}
 
 	return fmt.Errorf("file did not stabilise within timeout")
