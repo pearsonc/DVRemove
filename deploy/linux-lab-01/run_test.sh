@@ -4,10 +4,17 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 run="$here/run.sh"
-root=/home/chperso/dvremove-test
-mkdir -p "$root"
-work=$(mktemp -d "$root/run-test.XXXXXX")
+had_fixed=0; [ -e /home/chperso/dvremove-test ] && had_fixed=1
+work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# W11: nothing outside the worktree and the system temporary folder is created. The test folder run.sh
+# accepts is the one literal on its testroot line; the copy under test swaps that literal for $work, and
+# the check below proves no other line differs.
+root=$work
+sed "/^testroot=/s|/home/chperso/dvremove-test|$work|" "$run" >"$work/run.sh"
+chmod +x "$work/run.sh"
+[ "$(diff "$run" "$work/run.sh" | /usr/bin/grep -c '^>')" = 1 ] || { echo "FAIL: copy of run.sh differs on other than the testroot line"; exit 1; }
+run="$work/run.sh"
 mkdir -p "$work/bin" "$work/in" "$work/out" "$work/state" "$work/extra"
 cat >"$work/bin/docker" <<'STUB'
 #!/bin/sh
@@ -50,6 +57,9 @@ volumes() {
 check_flags() { # LABEL: every invariant flag is present
   local l=$1 f
   [ "${A[0]:-}" = run ] || bad "$l: first argument is not run"
+  has_pair --user 1000:1000 && ok || bad "$l: --user 1000:1000 missing"
+  local u=0 a; for a in "${A[@]}"; do case $a in --user|--user=*|-u|-u*) u=$((u + 1)) ;; esac; done
+  [ "$u" -le 1 ] || bad "$l: --user given $u times"
   has_arg --read-only || bad "$l: --read-only missing"
   for f in "--group-add 991" "--network none" "--cap-drop ALL" \
            "--security-opt no-new-privileges" "--tmpfs /tmp:size=64m" \
@@ -192,6 +202,16 @@ refuse bind-empty "${st[@]}" -b ""
 refuse command-option "${st[@]}" -- --privileged
 refuse command-empty "${st[@]}" -- ""
 refuse command-dash-with-args "${st[@]}" -- -v /x
+
+# W10, D17: another image's default user never runs, so the user is passed whatever the tag.
+invoke user-foreign-image "${st[@]}" -t busybox:latest -- sh || bad "user-foreign-image: exited $?"
+has_pair --user 1000:1000 && ok || bad "user-foreign-image: docker did not receive --user 1000:1000"
+has_pair --group-add 991 && ok || bad "user-foreign-image: --group-add 991 missing"
+invoke user-foreign-default "${st[@]}" -t busybox:latest || bad "user-foreign-default: exited $?"
+has_pair --user 1000:1000 && ok || bad "user-foreign-default: docker did not receive --user 1000:1000"
+
+# W11: the test touched nothing at the fixed test folder.
+[ ! -e /home/chperso/dvremove-test ] || [ "$had_fixed" = 1 ] && ok || bad "run_test.sh created /home/chperso/dvremove-test"
 
 # Accepted: a regular file as a bind source, and a source under the media disk.
 invoke bind-file "${st[@]}" -b "$work/file:/x" || bad "bind-file: exited $?"

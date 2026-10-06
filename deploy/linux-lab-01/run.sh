@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The one launcher for every dvremove container (D17, D19). The isolation flags sit in
 # one array that no option reaches, so no option drops or weakens one.
+# Every container runs as 1000:1000 with group 991 added, whatever image -t names.
 #
 # Usage: run.sh [-c config] [-t tag] [-i input] [-o output] [-s state] [-b src:dst]... [-- command [args]]
 #   -c  config file, passed to dvremove on standard input (default: config.yaml beside this script)
@@ -82,6 +83,7 @@ done
 
 safe=(
   --rm --name dvremove
+  --user 1000:1000
   --group-add 991
   --network none
   --cap-drop ALL
