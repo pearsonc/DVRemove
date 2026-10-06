@@ -63,3 +63,21 @@ func TestRepositoryConfigStillLoads(t *testing.T) {
 		t.Fatalf("repository config.yaml no longer loads: %v", err)
 	}
 }
+
+// Hazard: H3
+func TestLoadConfigReadsTempDir(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, "temp_dir: /var/tmp\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TempDir != "/var/tmp" {
+		t.Errorf("TempDir = %q, want /var/tmp", cfg.TempDir)
+	}
+	cfg, err = LoadConfig(writeConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TempDir != "" {
+		t.Errorf("unset TempDir = %q, want empty", cfg.TempDir)
+	}
+}
