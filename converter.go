@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -105,6 +106,8 @@ type MediaInfoOutput struct {
 	Media struct {
 		Track []struct {
 			Type             string `json:"@type"`
+			Width            string `json:"Width"`
+			Height           string `json:"Height"`
 			HDRFormat        string `json:"HDR_Format"`
 			HDRFormatProfile string `json:"HDR_Format_Profile"`
 		} `json:"track"`
@@ -113,17 +116,24 @@ type MediaInfoOutput struct {
 
 // DetectProfile analyses an MKV file and returns its DV profile.
 func (c *Converter) DetectProfile(filePath string) (DVProfile, error) {
+	profile, _, _, err := c.probeVideo(filePath)
+	return profile, err
+}
+
+// probeVideo returns a file's DV profile and the width and height of its Dolby Vision video,
+// which are 0 where mediainfo reports none.
+func (c *Converter) probeVideo(filePath string) (profile DVProfile, width, height int, err error) {
 	c.log.Debug().Str("file", filePath).Msg("detecting DV profile")
 
 	cmd := exec.Command("mediainfo", "--Output=JSON", filePath)
 	output, err := cmd.Output()
 	if err != nil {
-		return ProfileUnknown, fmt.Errorf("failed to run mediainfo on %s: %w", filePath, err)
+		return ProfileUnknown, 0, 0, fmt.Errorf("failed to run mediainfo on %s: %w", filePath, err)
 	}
 
 	var info MediaInfoOutput
 	if err := json.Unmarshal(output, &info); err != nil {
-		return ProfileUnknown, fmt.Errorf("failed to parse mediainfo output for %s: %w", filePath, err)
+		return ProfileUnknown, 0, 0, fmt.Errorf("failed to parse mediainfo output for %s: %w", filePath, err)
 	}
 
 	for _, track := range info.Media.Track {
@@ -135,21 +145,23 @@ func (c *Converter) DetectProfile(filePath string) (DVProfile, error) {
 			continue
 		}
 
-		profile := track.HDRFormatProfile
-		c.log.Debug().Str("file", filePath).Str("profile", profile).Msg("found DV profile string")
+		profileStr := track.HDRFormatProfile
+		w, _ := strconv.Atoi(track.Width)
+		h, _ := strconv.Atoi(track.Height)
+		c.log.Debug().Str("file", filePath).Str("profile", profileStr).Msg("found DV profile string")
 
-		if strings.Contains(profile, "dvhe.05") || strings.Contains(profile, "Profile 5") {
-			return Profile5, nil
+		if strings.Contains(profileStr, "dvhe.05") || strings.Contains(profileStr, "Profile 5") {
+			return Profile5, w, h, nil
 		}
-		if strings.Contains(profile, "dvhe.07") || strings.Contains(profile, "Profile 7") {
-			return Profile7, nil
+		if strings.Contains(profileStr, "dvhe.07") || strings.Contains(profileStr, "Profile 7") {
+			return Profile7, w, h, nil
 		}
-		if strings.Contains(profile, "dvhe.08") || strings.Contains(profile, "Profile 8") {
-			return Profile8, nil
+		if strings.Contains(profileStr, "dvhe.08") || strings.Contains(profileStr, "Profile 8") {
+			return Profile8, w, h, nil
 		}
 	}
 
-	return ProfileUnknown, nil
+	return ProfileUnknown, 0, 0, nil
 }
 
 // Convert processes a single file and converts it to Profile 8.1.
@@ -163,12 +175,18 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 		cb = progressCb[0]
 	}
 
-	profile, err := c.DetectProfile(inputPath)
+	profile, width, height, err := c.probeVideo(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to detect profile for %s: %w", filename, err)
 	}
 
 	c.log.Info().Str("file", filename).Str("profile", profile.String()).Msg("detected profile")
+
+	if profile == Profile5 || profile == Profile7 {
+		if err := refuseAboveUHD(filename, width, height); err != nil {
+			return err
+		}
+	}
 
 	switch profile {
 	case Profile5:
