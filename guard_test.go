@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -199,5 +202,179 @@ exit 0
 				}
 			})
 		}
+	}
+}
+
+// logLines parses the JSON log lines a test logger wrote.
+func logLines(t *testing.T, text string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if line == "" {
+			continue
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// lineWith returns the log line whose message is msg.
+func lineWith(t *testing.T, lines []map[string]any, msg string) map[string]any {
+	t.Helper()
+	for _, l := range lines {
+		if l["message"] == msg {
+			return l
+		}
+	}
+	t.Fatalf("no log line %q in %v", msg, lines)
+	return nil
+}
+
+// Hazard: D19
+func TestRunLoggingReadsCgroupAndFreeSpace(t *testing.T) {
+	root := t.TempDir()
+	for name, v := range map[string]string{"memory.peak": "123456789\n", "pids.peak": "42\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(v), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	empty := t.TempDir()
+	onlyPids := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onlyPids, "pids.peak"), []byte("7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := t.TempDir()
+	if err := os.Mkdir(filepath.Join(unreadable, "memory.peak"), 0o755); err != nil { // reading a directory fails
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name         string
+		root         string
+		wantMem      any
+		wantPids     any
+		wantMsgStart string
+	}{
+		{"files present", root, float64(123456789), float64(42), ""},
+		{"files absent", empty, "unavailable", "unavailable", ""},
+		{"one present, one absent", onlyPids, "unavailable", float64(7), ""},
+		{"one unreadable", unreadable, "unavailable", "unavailable", ""},
+	} {
+		t.Run("end/"+tc.name, func(t *testing.T) {
+			sink := &lockedBuffer{}
+			logRunEnd(zerolog.New(sink), tc.root)
+			l := lineWith(t, logLines(t, sink.String()), "run resources at end")
+			if l["memory_peak_bytes"] != tc.wantMem {
+				t.Errorf("memory_peak_bytes = %v, want %v", l["memory_peak_bytes"], tc.wantMem)
+			}
+			if l["pids_peak"] != tc.wantPids {
+				t.Errorf("pids_peak = %v, want %v", l["pids_peak"], tc.wantPids)
+			}
+		})
+	}
+
+	t.Run("start", func(t *testing.T) {
+		free := func(dir string) (uint64, error) {
+			switch dir {
+			case "/scratch":
+				return 111, nil
+			case "/out":
+				return 0, errors.New("statfs failed")
+			case os.TempDir():
+				return 222, nil
+			}
+			return 0, errors.New("unexpected " + dir)
+		}
+		sink := &lockedBuffer{}
+		logRunStart(zerolog.New(sink), "/scratch", "/out", free)
+		l := lineWith(t, logLines(t, sink.String()), "run resources at start")
+		if l["temp_dir"] != "/scratch" || l["temp_free_bytes"] != float64(111) {
+			t.Errorf("temp_dir, temp_free_bytes = %v, %v, want /scratch, 111", l["temp_dir"], l["temp_free_bytes"])
+		}
+		if l["output_dir"] != "/out" || l["output_free_bytes"] != "unavailable" {
+			t.Errorf("output_dir, output_free_bytes = %v, %v, want /out, unavailable", l["output_dir"], l["output_free_bytes"])
+		}
+
+		sink = &lockedBuffer{}
+		logRunStart(zerolog.New(sink), "", "/out", free)
+		l = lineWith(t, logLines(t, sink.String()), "run resources at start")
+		if l["temp_dir"] != os.TempDir() || l["temp_free_bytes"] != float64(222) {
+			t.Errorf("with temp_dir unset: temp_dir, temp_free_bytes = %v, %v, want %s, 222", l["temp_dir"], l["temp_free_bytes"], os.TempDir())
+		}
+	})
+}
+
+// Hazard: D19
+func TestOnceLogsRunResources(t *testing.T) {
+	stubTools(t, "dvhe.07")
+	root := t.TempDir()
+	for _, d := range []string{"in", "out", "logs"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeInput(t, filepath.Join(root, "in"), "film.mkv", 1024)
+	cfg := fmt.Sprintf("input_dir: %s/in\noutput_dir: %s/out\nlog_dir: %s/logs\ntemp_dir: %s\n", root, root, root, t.TempDir())
+	cfgPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "--", "-config", cfgPath, "-once", "-no-ui")
+	cmd.Env = append(os.Environ(), "DVREMOVE_TEST_MAIN=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dvremove -once: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "logs", "dvremove.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := logLines(t, string(data))
+	start := lineWith(t, lines, "run resources at start")
+	for _, key := range []string{"temp_dir", "temp_free_bytes", "output_dir", "output_free_bytes"} {
+		if _, ok := start[key]; !ok {
+			t.Errorf("the run's start line lacks %s: %v", key, start)
+		}
+	}
+	end := lineWith(t, lines, "run resources at end")
+	for _, key := range []string{"memory_peak_bytes", "pids_peak"} {
+		if _, ok := end[key]; !ok {
+			t.Errorf("the run's end line lacks %s: %v", key, end)
+		}
+	}
+}
+
+// Hazard: H15
+func TestGuardLimitsComeFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	write := func(extra string) string {
+		path := filepath.Join(dir, "c.yaml")
+		text := fmt.Sprintf("input_dir: %s\noutput_dir: %s\nlog_dir: %s\n%s", dir, dir, dir, extra)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	cfg, err := LoadConfig(write("guard_min_available_mib: 6144\nguard_max_swap_growth_mib: 512\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newTestConverter(t, dir)
+	c.SetGuardLimits(cfg.GuardMinAvailableMiB, cfg.GuardMaxSwapGrowthMiB)
+	if c.minAvail != 6*gib || c.maxSwapGrowth != gib/2 {
+		t.Errorf("limits %d, %d, want %d, %d", c.minAvail, c.maxSwapGrowth, 6*gib, gib/2)
+	}
+
+	cfg, err = LoadConfig(write(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = newTestConverter(t, dir)
+	c.SetGuardLimits(cfg.GuardMinAvailableMiB, cfg.GuardMaxSwapGrowthMiB)
+	if c.minAvail != 4*gib || c.maxSwapGrowth != gib {
+		t.Errorf("defaults %d, %d, want %d, %d", c.minAvail, c.maxSwapGrowth, 4*gib, gib)
 	}
 }
