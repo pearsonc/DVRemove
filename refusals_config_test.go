@@ -117,3 +117,12 @@ func TestExistingPartialRefusedBeforeWork(t *testing.T) {
 		})
 	}
 }
+
+// Hazard: H15
+func TestGuardLimitOverflow(t *testing.T) {
+	c := newTestConverter(t, t.TempDir())
+	c.SetGuardLimits(1<<44, 1<<44)
+	if c.minAvail == 0 || c.maxSwapGrowth == 0 {
+		t.Errorf("guard limits of 2^44 MiB became minAvail=%d maxSwapGrowth=%d bytes", c.minAvail, c.maxSwapGrowth)
+	}
+}
