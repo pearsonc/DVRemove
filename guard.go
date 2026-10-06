@@ -59,12 +59,13 @@ func defaultGuardSettings() guardSettings {
 	}
 }
 
-// SetGuardLimits sets the guard's thresholds in MiB; 0 keeps a default.
+// SetGuardLimits sets the guard's thresholds in MiB; 0, or a value too large to hold in bytes,
+// keeps the current limit, so no value turns the guard off (H15).
 func (c *Converter) SetGuardLimits(minAvailMiB, maxSwapGrowthMiB uint64) {
-	if minAvailMiB > 0 {
+	if minAvailMiB > 0 && minAvailMiB <= maxGuardMiB {
 		c.minAvail = minAvailMiB << 20
 	}
-	if maxSwapGrowthMiB > 0 {
+	if maxSwapGrowthMiB > 0 && maxSwapGrowthMiB <= maxGuardMiB {
 		c.maxSwapGrowth = maxSwapGrowthMiB << 20
 	}
 }
