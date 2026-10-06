@@ -43,6 +43,8 @@ func main() {
 
 	converter := NewConverter(cfg.InputDir, cfg.OutputDir, cfg.Transcode, log)
 	converter.SetTempDir(cfg.TempDir)
+	converter.SetGuardLimits(cfg.GuardMinAvailableMiB, cfg.GuardMaxSwapGrowthMiB)
+	logRunStart(log, cfg.TempDir, cfg.OutputDir, diskFree)
 	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)
 
 	// Process any existing files
@@ -50,6 +52,8 @@ func main() {
 	if batchErr != nil {
 		log.Error().Err(batchErr).Msg("failed to process existing files")
 	}
+
+	logRunEnd(log, cgroupRoot)
 
 	if *oneShot {
 		if batchErr != nil {

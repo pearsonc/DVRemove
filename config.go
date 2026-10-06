@@ -31,6 +31,10 @@ type Config struct {
 	TempDir   string          `yaml:"temp_dir"` // where temporary files go; empty means the OS default
 	Transcode TranscodeConfig `yaml:"transcode"`
 	Parallel  ParallelConfig  `yaml:"parallel"`
+
+	// Host memory guard limits in MiB (H15); 0 keeps the default of 4096 and 1024.
+	GuardMinAvailableMiB  uint64 `yaml:"guard_min_available_mib"`
+	GuardMaxSwapGrowthMiB uint64 `yaml:"guard_max_swap_growth_mib"`
 }
 
 // LoadConfig reads configuration from a YAML file.
