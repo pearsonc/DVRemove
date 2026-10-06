@@ -56,6 +56,7 @@ func main() {
 	converter := NewConverter(cfg.InputDir, cfg.OutputDir, cfg.Transcode, log)
 	converter.SetTempDir(cfg.TempDir)
 	converter.SetJournal(journal)
+	converter.SetLedger(NewLedger(filepath.Join(cfg.StateDir, "ledger.txt")))
 	converter.SetGuardLimits(cfg.GuardMinAvailableMiB, cfg.GuardMaxSwapGrowthMiB)
 	logRunStart(log, cfg.TempDir, cfg.OutputDir, diskFree)
 	watcher := NewWatcher(cfg.InputDir, converter, cfg.Parallel.MaxWorkers, ui, log)

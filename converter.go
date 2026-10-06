@@ -48,6 +48,7 @@ type Converter struct {
 	// freeSpace reports the bytes available to a non-root user on dir's filesystem.
 	freeSpace func(dir string) (uint64, error)
 	journal   *Journal // paths recorded before they are created; nil records nothing
+	ledger    *Ledger  // converted inputs, skipped by name and size; nil skips nothing
 	guardSettings
 }
 
@@ -151,6 +152,10 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 		cb = progressCb[0]
 	}
 
+	if done, err := c.alreadyConverted(inputPath); err != nil || done {
+		return err
+	}
+
 	profile, width, height, err := c.probeVideo(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to detect profile for %s: %w", filename, err)
@@ -207,7 +212,7 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 	}
 
 	c.log.Info().Str("file", filename).Str("output", outputPath).Msg("conversion complete")
-	return nil
+	return c.markConverted(inputPath)
 }
 
 // stderrLogLimit bounds the stderr of one tool held in memory and written to the log.
@@ -431,7 +436,7 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 	}
 
 	c.log.Info().Str("file", filename).Str("output", outputPath).Msg("transcode complete")
-	return nil
+	return c.markConverted(inputPath)
 }
 
 // muxWithAudio combines transcoded video with original audio and subtitles.
