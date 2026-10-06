@@ -81,16 +81,17 @@ func (w *Watcher) ProcessExisting() error {
 		pool.Close()
 	}()
 
-	// Drain results (UI handles display)
-	pool.Drain()
-	pool.Wait()
+	// Close the results channel once the workers finish, while Drain reads it: a worker
+	// blocks on a full results channel, so Wait before Drain never returns.
+	go pool.Wait()
+	processed, failed := pool.Drain()
 
 	// Print summary
 	if w.ui != nil {
 		w.ui.PrintSummary()
 	}
 
-	w.log.Info().Int("processed", len(files)).Msg("batch complete")
+	w.log.Info().Int("processed", processed).Int("failed", failed).Msg("batch complete")
 	return nil
 }
 
