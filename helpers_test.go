@@ -84,3 +84,43 @@ func writeInput(t *testing.T, dir, name string, size int64) string {
 	}
 	return path
 }
+
+// stubFirst writes executables named in scripts into a new directory placed first on PATH, so
+// they shadow the ones stubTools wrote.
+func stubFirst(t *testing.T, scripts map[string]string) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, body := range scripts {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// stubVideoSize shadows mediainfo with one that reports a Dolby Vision video track of the given
+// size, as mediainfo does: Width and Height are strings.
+func stubVideoSize(t *testing.T, profile, width, height string) {
+	t.Helper()
+	stubFirst(t, map[string]string{
+		"mediainfo": "echo \"$(basename \"$0\") $*\" >> \"$STUB_LOG\"\n" +
+			"echo '{\"media\":{\"track\":[{\"@type\":\"Video\",\"Width\":\"" + width + "\",\"Height\":\"" + height +
+			"\",\"HDR_Format\":\"Dolby Vision\",\"HDR_Format_Profile\":\"" + profile + "\"}]}}'\n",
+	})
+}
+
+// ffmpegCalls counts the ffmpeg calls in the stub log other than the capability probes.
+func ffmpegCalls(t *testing.T, logPath string) int {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "ffmpeg ") && !strings.Contains(line, "-filters") && !strings.Contains(line, "-encoders") {
+			n++
+		}
+	}
+	return n
+}
