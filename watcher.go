@@ -1,11 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -152,24 +156,74 @@ func (w *Watcher) dropGrowing(files []string) []string {
 	return steady
 }
 
-// isGrowing reports whether the file's size changes across stableChecks waits.
+// isGrowing reports whether the file changes across stableChecks waits: in size, in its
+// modification or change time, or in the sampled bytes of fingerprint (H7).
 func (w *Watcher) isGrowing(filePath string) (bool, error) {
-	info, err := os.Stat(filePath)
+	first, err := fingerprint(filePath)
 	if err != nil {
-		return false, fmt.Errorf("failed to stat file: %w", err)
+		return false, err
 	}
-	size := info.Size()
 	for i := 0; i < stableChecks; i++ {
 		w.sleep(w.stableInterval)
-		info, err := os.Stat(filePath)
+		now, err := fingerprint(filePath)
 		if err != nil {
-			return false, fmt.Errorf("failed to stat file: %w", err)
+			return false, err
 		}
-		if info.Size() != size {
+		if now != first {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// Sampling for fingerprint: the head, the tail and sampleSpots evenly spaced blocks. A copy that
+// sets the length first, as an SMB client does, leaves the size fixed while the bytes change.
+const (
+	sampleBlock = 64 << 10
+	sampleSpots = 16
+)
+
+// fileState is what fingerprint compares between two looks at a file.
+type fileState struct {
+	size         int64
+	mtime, ctime int64 // nanoseconds; coarse on some network filesystems
+	sample       [sha256.Size]byte
+}
+
+// fingerprint reads a file's size, times and a hash of sampled blocks. On a CIFS mount the times
+// may be coarse, so a write that moves none of them is seen only if it lands in a sampled block.
+func fingerprint(path string) (fileState, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return fileState{}, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fileState{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	st := fileState{size: info.Size(), mtime: info.ModTime().UnixNano()}
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+		st.ctime = sys.Ctim.Nano()
+	}
+	h := sha256.New()
+	buf := make([]byte, sampleBlock)
+	for i := 0; i <= sampleSpots; i++ {
+		off := (st.size - sampleBlock) / sampleSpots * int64(i) // spot 0 is the head
+		if i == sampleSpots {
+			off = st.size - sampleBlock // the tail
+		}
+		if off < 0 {
+			off = 0
+		}
+		n, err := f.ReadAt(buf, off)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fileState{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		h.Write(buf[:n])
+	}
+	h.Sum(st.sample[:0])
+	return st, nil
 }
 
 // Watch starts watching the input directory for new files.
@@ -234,20 +288,19 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}()
 }
 
-// waitForStable waits until a file stops changing size.
+// waitForStable waits until a file stops changing, by the fingerprint isGrowing uses.
 func (w *Watcher) waitForStable(filePath string) error {
-	var lastSize int64 = -1
+	var last fileState
+	haveLast := false
 	stableCount := 0
 	maxWait := 60 // Maximum wait iterations
 
 	for i := 0; i < maxWait; i++ {
-		info, err := os.Stat(filePath)
+		current, err := fingerprint(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to stat file: %w", err)
+			return err
 		}
-
-		currentSize := info.Size()
-		if currentSize == lastSize {
+		if haveLast && current == last {
 			stableCount++
 			if stableCount >= 3 {
 				// File size stable for 3 checks (3 seconds)
@@ -255,7 +308,7 @@ func (w *Watcher) waitForStable(filePath string) error {
 			}
 		} else {
 			stableCount = 0
-			lastSize = currentSize
+			last, haveLast = current, true
 		}
 
 		w.sleep(w.stableInterval)
