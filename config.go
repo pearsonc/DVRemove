@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -51,6 +52,13 @@ func LoadConfig(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
+	// Only the first document would be read, so a key in a later one would be dropped silently (H3).
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("config file %s holds more than one YAML document, and only one is read", path)
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("failed to parse config file %s after its first document: %w", path, err)
+	}
 
 	cfg.setDefaults()
 
@@ -82,7 +90,18 @@ func (c *Config) setDefaults() {
 	}
 }
 
+// maxGuardMiB is the largest guard limit that still fits in bytes once shifted left by 20 (H15).
+const maxGuardMiB = math.MaxUint64 >> 20
+
 func (c *Config) validate() error {
+	for key, v := range map[string]uint64{
+		"guard_min_available_mib":   c.GuardMinAvailableMiB,
+		"guard_max_swap_growth_mib": c.GuardMaxSwapGrowthMiB,
+	} {
+		if v > maxGuardMiB {
+			return fmt.Errorf("%s is %d, too large to hold in bytes (largest %d)", key, v, uint64(maxGuardMiB))
+		}
+	}
 	if c.InputDir == "" {
 		return fmt.Errorf("input_dir is required")
 	}

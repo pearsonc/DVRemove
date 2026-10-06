@@ -96,3 +96,24 @@ func TestGuardLimitTooLargeForBytesRefusedAtLoad(t *testing.T) {
 		}
 	}
 }
+
+// Hazard: H11
+func TestExistingPartialRefusedBeforeWork(t *testing.T) {
+	for _, p := range profilePaths {
+		t.Run(p.name, func(t *testing.T) {
+			logPath := stubTools(t, p.stub)
+			stubVideoSize(t, p.stub, "3840", "2160")
+			out := t.TempDir()
+			if err := os.WriteFile(filepath.Join(out, "film.mkv"+partialSuffix), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := newTestConverter(t, out)
+			c.SetTempDir(t.TempDir())
+			c.freeSpace = plentyOfSpace
+			err := c.Convert(writeInput(t, t.TempDir(), "film.mkv", 1024))
+			if n := ffmpegCalls(t, logPath); err == nil || n != 0 {
+				t.Errorf("a partial at the output's name was not refused before work: err=%v, %d ffmpeg calls", err, n)
+			}
+		})
+	}
+}

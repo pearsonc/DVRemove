@@ -68,13 +68,10 @@ var linkFile = os.Link
 // final only when mux succeeds. A file already at final is never replaced (H11): the call fails
 // naming it, and the partial this call made is removed.
 func (c *Converter) writeOutput(final string, mux func(partial string) error) error {
-	if err := outputFree(final); err != nil {
+	if err := outputNamesFree(final); err != nil {
 		return err
 	}
 	partial := final + partialSuffix
-	if _, err := os.Lstat(partial); err == nil {
-		return fmt.Errorf("a file already stands at %s, not overwriting it", partial)
-	}
 	if err := c.record(partial); err != nil {
 		return err
 	}
@@ -83,6 +80,19 @@ func (c *Converter) writeOutput(final string, mux func(partial string) error) er
 		return err
 	}
 	return publishOutput(partial, final)
+}
+
+// outputNamesFree returns an error if anything stands at final or at its partial's name, the two
+// names a conversion writes. Convert asks it before any work, and writeOutput asks again.
+func outputNamesFree(final string) error {
+	if err := outputFree(final); err != nil {
+		return err
+	}
+	partial := final + partialSuffix
+	if _, err := os.Lstat(partial); err == nil {
+		return fmt.Errorf("a file already stands at %s, not overwriting it", partial)
+	}
+	return nil
 }
 
 // outputFree returns an error naming final if anything stands at that name.

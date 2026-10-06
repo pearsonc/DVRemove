@@ -21,7 +21,7 @@ func stubTools(t *testing.T, profile string) (logPath string) {
 	const record = "echo \"$(basename \"$0\") $*\" >> \"$STUB_LOG\"\n"
 	const touchO = "prev=; for a in \"$@\"; do [ \"$prev\" = -o ] && : > \"$a\"; prev=$a; done; exit 0\n"
 	scripts := map[string]string{
-		"mediainfo": record + "echo '{\"media\":{\"track\":[{\"@type\":\"Video\",\"HDR_Format\":\"Dolby Vision\",\"HDR_Format_Profile\":\"'\"$STUB_PROFILE\"'\"}]}}'\n",
+		"mediainfo": record + "echo '{\"media\":{\"track\":[{\"@type\":\"Video\",\"Width\":\"3840\",\"Height\":\"2160\",\"HDR_Format\":\"Dolby Vision\",\"HDR_Format_Profile\":\"'\"$STUB_PROFILE\"'\"}]}}'\n",
 		"ffprobe":   record + "echo 60\n",
 		"ffmpeg": record +
 			"case \"$*\" in *-filters*) echo ' libplacebo';; *-encoders*) ;; esac\n" +
