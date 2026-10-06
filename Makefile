@@ -5,7 +5,7 @@ DEPLOY_DIR=/home/chperso/dvremove
 BUILD_DIR=$(DEPLOY_DIR)/build
 UNIT_DIR=.config/systemd/user
 
-.PHONY: build build-linux test deploy image install-units clean
+.PHONY: build build-linux test runbooks deploy image install-units clean
 
 build:
 	go build -o $(BINARY) .
@@ -17,6 +17,11 @@ build-linux:
 test:
 	go test -race -count=1 ./...
 	deploy/linux-lab-01/run_test.sh
+	deploy/linux-lab-01/runbooks_test.sh
+
+# Runs every step of every runbook on the host. A step that changes state runs against a fixture the runner plants and removes.
+runbooks:
+	RB_HOST=$(SERVER) RB_PORT=$(SERVER_PORT) RB_ROOT=/home/chperso/dvremove-test deploy/linux-lab-01/runbooks.sh
 
 # Copies the binary, Dockerfile, .dockerignore and launcher files to the build folder, and nothing else.
 deploy: build-linux

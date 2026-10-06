@@ -64,6 +64,7 @@ EOS
 runbook "$clean/b.md" 'Is the second one clean?' <<'EOS'
 bash	true
 EOS
+printf '\nA sample, which is no step:\n\n```text\nfalse\n```\n' >>"$clean/b.md"
 index "$clean" a.md b.md
 : >"$SSH_LOG"
 case_run clean "$clean" 0
