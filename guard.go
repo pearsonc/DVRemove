@@ -79,39 +79,54 @@ func refuseAboveUHD(filename string, width, height int) error {
 	return nil
 }
 
-// readMeminfo returns MemAvailable and swap used (SwapTotal less SwapFree) in bytes.
-func readMeminfo(path string) (avail, swapUsed uint64, err error) {
+// readMeminfo returns MemAvailable and swap used (SwapTotal less SwapFree) in bytes. haveSwap is
+// false when either swap line is missing, and swapUsed is then 0. A reading with no MemAvailable
+// is an error, because a guard that cannot read it cannot guard (H15).
+func readMeminfo(path string) (avail, swapUsed uint64, haveSwap bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	defer f.Close()
 	var total, free uint64
-	seen := 0
+	var haveAvail, haveTotal, haveFree bool
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) < 2 {
 			continue
 		}
-		dst := map[string]*uint64{"MemAvailable:": &avail, "SwapTotal:": &total, "SwapFree:": &free}[fields[0]]
-		if dst == nil {
+		var dst *uint64
+		var seen *bool
+		switch fields[0] {
+		case "MemAvailable:":
+			dst, seen = &avail, &haveAvail
+		case "SwapTotal:":
+			dst, seen = &total, &haveTotal
+		case "SwapFree:":
+			dst, seen = &free, &haveFree
+		default:
 			continue
 		}
 		kib, perr := strconv.ParseUint(fields[1], 10, 64)
 		if perr != nil {
-			return 0, 0, fmt.Errorf("parsing %s in %s: %w", fields[0], path, perr)
+			return 0, 0, false, fmt.Errorf("parsing %s in %s: %w", fields[0], path, perr)
 		}
-		*dst = kib << 10
-		seen++
+		*dst, *seen = kib<<10, true
 	}
 	if err := sc.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
-	if seen < 3 {
-		return 0, 0, fmt.Errorf("%s lacks MemAvailable, SwapTotal or SwapFree", path)
+	if !haveAvail {
+		return 0, 0, false, fmt.Errorf("%s has no MemAvailable line", path)
 	}
-	return avail, total - free, nil
+	if !haveTotal || !haveFree {
+		return avail, 0, false, nil
+	}
+	if free > total {
+		return avail, 0, true, nil
+	}
+	return avail, total - free, true, nil
 }
 
 // memGuard stops a conversion's processes when the host runs short of memory.
@@ -128,10 +143,14 @@ type memGuard struct {
 // conversion's processes.
 func (c *Converter) newMemGuard() *memGuard {
 	g := &memGuard{guardSettings: c.guardSettings, log: c.log}
-	if _, swap, err := readMeminfo(g.memInfoPath); err == nil {
+	_, swap, haveSwap, err := readMeminfo(g.memInfoPath)
+	switch {
+	case err != nil:
+		g.log.Warn().Err(err).Msg("memory guard cannot read the host's memory at the conversion's start")
+	case !haveSwap:
+		g.log.Warn().Str("swap", unavailable).Msg("memory guard: the swap lines are unavailable, guarding MemAvailable only")
+	default:
 		g.baseline, g.haveBase = swap, true
-	} else {
-		g.log.Warn().Err(err).Msg("memory guard cannot read the swap level at the conversion's start")
 	}
 	return g
 }
@@ -149,15 +168,14 @@ func (g *memGuard) watch(procs ...*os.Process) (stop func() error) {
 			case <-quit:
 				return
 			case <-tick.C:
-				avail, swap, err := readMeminfo(g.memInfoPath)
-				if err != nil {
-					continue
-				}
+				avail, swap, haveSwap, err := readMeminfo(g.memInfoPath)
 				reason := ""
 				switch {
+				case err != nil:
+					reason = "the host's memory could not be read: " + err.Error()
 				case avail < g.minAvail:
 					reason = "MemAvailable below the minimum"
-				case g.haveBase && swap > g.baseline && swap-g.baseline > g.maxSwapGrowth:
+				case g.haveBase && haveSwap && swap > g.baseline && swap-g.baseline > g.maxSwapGrowth:
 					reason = "swap used rose above its limit"
 				}
 				if reason == "" {

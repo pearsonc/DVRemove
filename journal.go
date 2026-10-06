@@ -28,6 +28,17 @@ func NewJournal(path string) *Journal { return &Journal{path: path} }
 func (j *Journal) Add(path string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if cut, err := endsMidLine(j.path); err != nil {
+		return err
+	} else if cut {
+		entries, err := j.read()
+		if err != nil {
+			return err
+		}
+		if err := j.write(entries); err != nil { // drops the cut tail so the new line does not join it
+			return err
+		}
+	}
 	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open journal %s: %w", j.path, err)
@@ -76,7 +87,9 @@ func (j *Journal) read() ([]string, error) {
 		return nil, fmt.Errorf("failed to read journal %s: %w", j.path, err)
 	}
 	var entries []string
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+	lines = lines[:len(lines)-1] // what follows the last newline is a line a killed run cut short (H9)
+	for _, line := range lines {
 		if line == "" {
 			continue
 		}

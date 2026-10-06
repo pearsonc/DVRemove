@@ -15,8 +15,11 @@ import (
 
 // Ledger records the inputs dvremove has converted (H5, D15), one line each: the input's size in
 // bytes, a tab, then its file name verbatim. A person deletes a line to have a title converted
-// again. Only a line that ends in a newline counts, so a line cut short by a killed run names
-// nothing and is never read as a shorter file name.
+// again. A line counts when it ends in a newline, or is the last and names a complete .mkv, so
+// a hand edit that leaves no final newline still skips its title. A line cut short before its tab
+// or inside its name names nothing, because inputs are .mkv files and a cut name does not end
+// so. The one name that slips through is a cut that lands exactly on a shorter .mkv name. Add
+// appends a newline first so the next line never joins a cut line.
 type Ledger struct {
 	path string
 	mu   sync.Mutex
@@ -42,7 +45,10 @@ func (l *Ledger) Has(name string, size int64) (bool, error) {
 	for {
 		line, err := r.ReadString('\n')
 		if errors.Is(err, io.EOF) {
-			return false, nil // an unterminated last line is cut short
+			// A last line with no newline counts when it is a whole line for an .mkv, which is
+			// how an editor leaves a hand-trimmed ledger (H5). A cut anywhere before the
+			// extension, or before the tab, is not.
+			return line == want && strings.HasSuffix(strings.ToLower(name), ".mkv"), nil
 		}
 		if err != nil {
 			return false, fmt.Errorf("failed to read ledger %s: %w", l.path, err)

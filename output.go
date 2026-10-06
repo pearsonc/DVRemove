@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 )
 
 // tempPrefix starts the name of every temporary directory dvremove makes.
@@ -37,6 +39,7 @@ func (c *Converter) forget(path string) {
 
 // removeTemp removes a temporary directory and, once it is gone, its journal entry.
 func (c *Converter) removeTemp(dir string) {
+	defer spaceClaims.release(dir)
 	if err := os.RemoveAll(dir); err != nil {
 		c.log.Warn().Err(err).Str("path", dir).Msg("failed to remove temporary directory, the journal keeps it")
 		return
@@ -130,25 +133,80 @@ func (c *Converter) makeTempDir(inputPath string) (string, error) {
 		return "", fmt.Errorf("failed to stat input %s: %w", inputPath, err)
 	}
 	needed := uint64(info.Size()) * 2
-	free, err := c.freeSpace(parent)
-	if err != nil {
-		return "", fmt.Errorf("failed to read free space on %s: %w", parent, err)
-	}
-	if free < needed {
-		return "", fmt.Errorf("not enough free space on %s: %d bytes free, %d bytes needed (twice the input size %d)",
-			parent, free, needed, info.Size())
-	}
 	var suffix [8]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", fmt.Errorf("failed to name temp directory: %w", err)
 	}
 	dir := filepath.Join(parent, tempPrefix+hex.EncodeToString(suffix[:]))
+	// The claim is held from the check until removeTemp, so a conversion that starts meanwhile
+	// sees the free space less what this one will write (H10).
+	if err := spaceClaims.claim(dir, parent, needed, c.freeSpace); err != nil {
+		return "", err
+	}
 	if err := c.record(dir); err != nil {
+		spaceClaims.release(dir)
 		return "", err
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil {
+		spaceClaims.release(dir)
 		c.forget(dir)
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	return dir, nil
+}
+
+// spaceClaims is the free space the running conversions have claimed, so two checks that read the
+// same free space do not both pass for space only one can use (H10). Claims are keyed by the
+// filesystem's device, so two paths on one filesystem share a ledger of claims. It is process-wide
+// because the run lock admits one dvremove process, and its conversions share the filesystem.
+var spaceClaims = &claimBook{byDir: map[string]claim{}}
+
+type claim struct {
+	fs    string
+	bytes uint64
+}
+
+type claimBook struct {
+	mu    sync.Mutex
+	byDir map[string]claim
+}
+
+// fsKey names the filesystem holding dir by its device number, or by its path if that fails.
+func fsKey(dir string) string {
+	var st syscall.Stat_t
+	if err := syscall.Stat(dir, &st); err != nil {
+		return dir
+	}
+	return fmt.Sprintf("dev:%d", st.Dev)
+}
+
+// claim reserves needed bytes under dir on parent's filesystem, or fails naming the shortfall.
+// Reading the free space and recording the claim happen under one lock.
+func (b *claimBook) claim(dir, parent string, needed uint64, free func(string) (uint64, error)) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	avail, err := free(parent)
+	if err != nil {
+		return fmt.Errorf("failed to read free space on %s: %w", parent, err)
+	}
+	key := fsKey(parent)
+	var claimed uint64
+	for _, c := range b.byDir {
+		if c.fs == key {
+			claimed += c.bytes
+		}
+	}
+	if claimed > avail || avail-claimed < needed {
+		return fmt.Errorf("not enough free space on %s: %d bytes free, %d already claimed by running conversions, %d bytes needed (twice the input size)",
+			parent, avail, claimed, needed)
+	}
+	b.byDir[dir] = claim{fs: key, bytes: needed}
+	return nil
+}
+
+// release gives back dir's claim, whether its conversion finished or failed.
+func (b *claimBook) release(dir string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.byDir, dir)
 }
