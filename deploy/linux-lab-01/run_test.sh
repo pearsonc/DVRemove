@@ -4,7 +4,9 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 run="$here/run.sh"
-work=$(mktemp -d)
+root=/home/chperso/dvremove-test
+mkdir -p "$root"
+work=$(mktemp -d "$root/run-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/in" "$work/out" "$work/state" "$work/extra"
 cat >"$work/bin/docker" <<'STUB'
@@ -138,6 +140,64 @@ refuse privileged -c "$cfg" -s "$work/state" --privileged
 refuse unknown -c "$cfg" -s "$work/state" -z
 refuse missing-config -c "$work/absent.yaml" -s "$work/state"
 refuse relative-state -c "$cfg" -s rel/state
+
+# 6. U2's attacks and the rest of their class (D17, H14): no value reaches docker as an option or
+# widens what a container reaches. Each is refused with exit 2 and docker never called.
+mkdir -p "$work/state2"
+fifo="$work/fifo"; mkfifo "$fifo"
+sock="$work/sock"; python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$sock"
+ln -s / "$work/link-root"
+ln -s "$work/extra" "$work/link-extra"
+echo x >"$work/file"
+st=(-c "$cfg" -s "$work/state")
+refuse tag-network "${st[@]}" -t --network=host -- /usr/local/bin/dvremove dvremove:current -once -no-ui
+refuse tag-readonly "${st[@]}" -t --read-only=false -- /usr/local/bin/dvremove dvremove:current -once
+refuse tag-volume "${st[@]}" -t --volume=/:/host -- /bin/sh dvremove:current -c id
+refuse tag-capadd "${st[@]}" -t --cap-add=ALL -- /bin/sh dvremove:current -c id
+refuse tag-default "${st[@]}" -t --privileged
+refuse tag-empty "${st[@]}" -t ""
+refuse tag-space "${st[@]}" -t "dvremove:x --privileged"
+refuse output-root "${st[@]}" -o /
+refuse output-host-path "${st[@]}" -o /etc
+refuse output-dotdot "${st[@]}" -o "$work/../../../etc"
+refuse output-symlink "${st[@]}" -o "$work/link-root"
+refuse input-root "${st[@]}" -i /
+refuse input-home "${st[@]}" -i /home/chperso
+refuse input-comma "${st[@]}" -i "$work/in,x"
+refuse input-colon "${st[@]}" -i "$work/in:x"
+refuse input-option "${st[@]}" -i --privileged
+refuse state-root -c "$cfg" -s /
+refuse state-host-path -c "$cfg" -s /var/lib
+refuse state-colon -c "$cfg" -s "$work/st:x"
+refuse state-comma -c "$cfg" -s "$work/st,x"
+refuse bind-sock "${st[@]}" -b /var/run/docker.sock:/run/docker.sock
+refuse bind-root "${st[@]}" -b /:/host
+refuse bind-etc "${st[@]}" -b /etc:/x
+refuse bind-test-root "${st[@]}" -b "$root:/x"
+refuse bind-dotdot "${st[@]}" -b "$work/extra/../../..:/x"
+refuse bind-symlink-out "${st[@]}" -b "$work/link-root:/x"
+refuse bind-symlink-in-to-out "${st[@]}" -b "$work/link-root/etc:/x"
+refuse bind-socket "${st[@]}" -b "$sock:/x"
+refuse bind-fifo "${st[@]}" -b "$fifo:/x"
+refuse bind-missing "${st[@]}" -b "$work/absent:/x"
+refuse bind-comma-src "${st[@]}" -b "$work/extra,x:/x"
+refuse bind-comma-dst "${st[@]}" -b "$work/extra:/x,y"
+refuse bind-dst-data "${st[@]}" -b "$work/extra:/data"
+refuse bind-dst-data-slash "${st[@]}" -b "$work/extra:/data/"
+refuse bind-dst-data-dots "${st[@]}" -b "$work/extra:/x/../data"
+refuse bind-dst-state "${st[@]}" -b "$work/extra:/state"
+refuse bind-dst-root "${st[@]}" -b "$work/extra:/"
+refuse bind-dst-relative-dots "${st[@]}" -b "$work/extra:/.."
+refuse bind-empty "${st[@]}" -b ""
+refuse command-option "${st[@]}" -- --privileged
+refuse command-empty "${st[@]}" -- ""
+refuse command-dash-with-args "${st[@]}" -- -v /x
+
+# Accepted: a regular file as a bind source, and a source under the media disk.
+invoke bind-file "${st[@]}" -b "$work/file:/x" || bad "bind-file: exited $?"
+check_flags bind-file; check_volumes bind-file "$live_in" "$live_out" "$work/state" 1
+invoke bind-symlink-in "${st[@]}" -b "$work/link-extra:/x" || bad "bind-symlink-in: exited $?"
+check_flags bind-symlink-in
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
