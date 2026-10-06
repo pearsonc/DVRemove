@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"syscall"
 )
 
@@ -15,6 +16,14 @@ var ErrLocked = errors.New("another dvremove run is already running")
 // holder dies, even by kill -KILL, so a killed run leaves nothing that blocks the next one, and
 // the file's presence means nothing.
 type RunLock struct{ file *os.File }
+
+// held keeps every lock taken and not released reachable for the life of the process. A caller
+// that drops its *RunLock would otherwise leave the *os.File to the garbage collector, whose
+// cleanup closes the descriptor and with it the flock, while the run is still going (H12).
+var (
+	heldMu sync.Mutex
+	held   = map[*RunLock]struct{}{}
+)
 
 // AcquireLock takes the lock at path without waiting. It fails with ErrLocked, wrapped with the
 // path, when another process holds it.
@@ -30,8 +39,17 @@ func AcquireLock(path string) (*RunLock, error) {
 		}
 		return nil, fmt.Errorf("failed to lock %s: %w", path, err)
 	}
-	return &RunLock{file: f}, nil
+	l := &RunLock{file: f}
+	heldMu.Lock()
+	held[l] = struct{}{}
+	heldMu.Unlock()
+	return l, nil
 }
 
 // Release gives the lock up. A run that exits releases it anyway.
-func (l *RunLock) Release() { l.file.Close() }
+func (l *RunLock) Release() {
+	heldMu.Lock()
+	delete(held, l)
+	heldMu.Unlock()
+	l.file.Close()
+}
