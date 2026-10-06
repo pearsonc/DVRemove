@@ -62,33 +62,6 @@ func diskFree(dir string) (uint64, error) {
 	return st.Bavail * uint64(st.Bsize), nil
 }
 
-// makeTempDir creates a conversion's temporary directory under temp_dir, or the OS default
-// when it is unset, after checking that the filesystem holds twice the input's size.
-func (c *Converter) makeTempDir(inputPath string) (string, error) {
-	parent := c.tempDir
-	if parent == "" {
-		parent = os.TempDir()
-	}
-	info, err := os.Stat(inputPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to stat input %s: %w", inputPath, err)
-	}
-	needed := uint64(info.Size()) * 2
-	free, err := c.freeSpace(parent)
-	if err != nil {
-		return "", fmt.Errorf("failed to read free space on %s: %w", parent, err)
-	}
-	if free < needed {
-		return "", fmt.Errorf("not enough free space on %s: %d bytes free, %d bytes needed (twice the input size %d)",
-			parent, free, needed, info.Size())
-	}
-	dir, err := os.MkdirTemp(parent, "dvremove-*")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	return dir, nil
-}
-
 // NewConverter creates a new Converter instance.
 func NewConverter(inputDir, outputDir string, transcode TranscodeConfig, log zerolog.Logger) *Converter {
 	componentLog := log.With().Str("component", "converter").Logger()
@@ -227,7 +200,9 @@ func (c *Converter) Convert(inputPath string, progressCb ...ProgressCallback) er
 
 	// Step 3: Remux with original audio/subtitles
 	outputPath := filepath.Join(c.outputDir, filename)
-	if err := c.remux(inputPath, tempHEVCWithMeta, outputPath); err != nil {
+	if err := c.writeOutput(outputPath, func(partial string) error {
+		return c.remux(inputPath, tempHEVCWithMeta, partial)
+	}); err != nil {
 		return fmt.Errorf("failed to remux %s: %w", filename, err)
 	}
 
@@ -449,7 +424,9 @@ func (c *Converter) transcodeProfile5(inputPath string, progressCb ProgressCallb
 	}
 
 	// Step 2: Mux with original audio/subtitles
-	if err := c.muxWithAudio(inputPath, transcodedVideo, outputPath); err != nil {
+	if err := c.writeOutput(outputPath, func(partial string) error {
+		return c.muxWithAudio(inputPath, transcodedVideo, partial)
+	}); err != nil {
 		return fmt.Errorf("failed to mux audio/subtitles: %w", err)
 	}
 
