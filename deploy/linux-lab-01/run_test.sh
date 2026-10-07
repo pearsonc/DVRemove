@@ -96,8 +96,8 @@ check_volumes() { # LABEL IN OUT STATE EXTRA_COUNT: exactly the three binds plus
   return 0
 }
 
-live_in=/mnt/WD40MassStorage/dvremove/toConvert
-live_out=/mnt/WD40MassStorage/dvremove/Converted
+live_in=/home/chperso/dvremove/toConvert
+live_out=/home/chperso/dvremove/Converted
 cfg="$work/c.yaml"; echo 'input_dir: /data/toConvert' >"$cfg"
 
 # 1. Defaults: live folders, default tag, the state folder passed explicitly so no live path is touched.
@@ -106,8 +106,11 @@ check_flags defaults; check_volumes defaults "$live_in" "$live_out" "$work/state
 has_arg dvremove:current || bad "defaults: image tag dvremove:current missing"
 has_arg /dev/stdin || bad "defaults: config not passed"
 
-# 2. The default state folder is the live one.
-/usr/bin/grep -q '/home/chperso/dvremove/state' "$run" && ok || bad "default state folder absent from run.sh"
+# 2. The three default folders are the local live ones, and no NAS path is a default.
+for d in toConvert Converted state; do
+  /usr/bin/grep -q "^[a-z]*=/home/chperso/dvremove/$d\$" "$run" && ok || bad "default $d folder absent from run.sh"
+done
+/usr/bin/grep -q "^[a-z]*=/mnt/WD40MassStorage" "$run" && bad "a NAS path is a default folder in run.sh" || ok
 
 # 3. Each option.
 invoke folders -c "$cfg" -i "$work/in" -o "$work/out" -s "$work/state" || bad "folders: exited $?"
@@ -176,6 +179,9 @@ refuse input-home "${st[@]}" -i /home/chperso
 refuse input-comma "${st[@]}" -i "$work/in,x"
 refuse input-colon "${st[@]}" -i "$work/in:x"
 refuse input-option "${st[@]}" -i --privileged
+refuse input-nas "${st[@]}" -i /mnt/WD40MassStorage/dvremove/toConvert
+refuse output-nas "${st[@]}" -o /mnt/WD40MassStorage/dvremove/Converted
+refuse state-nas -c "$cfg" -s /mnt/WD40MassStorage/dvremove/state
 refuse state-root -c "$cfg" -s /
 refuse state-host-path -c "$cfg" -s /var/lib
 refuse state-colon -c "$cfg" -s "$work/st:x"
