@@ -1,6 +1,6 @@
 # How do I reconvert a title?
 
-Owner: the operator of linux-lab-01. Environment: linux-lab-01. Given: `TITLE` holds the title's file name as it sits in `toConvert`, exported in your shell, and the original is still in `/mnt/WD40MassStorage/dvremove/toConvert`.
+Owner: the operator of linux-lab-01. Environment: linux-lab-01. Given: `TITLE` holds the title's file name as it sits in `toConvert`, exported in your shell, and the original is still in `/home/chperso/dvremove/toConvert`.
 
 The ledger, `/home/chperso/dvremove/state/ledger.txt`, holds one line per converted input, and a title whose line is gone is converted again at the next run. Nothing here touches a file Chris owns. The steps read `STATE` for the state folder, which you leave unset; the runner sets it to a fixture.
 

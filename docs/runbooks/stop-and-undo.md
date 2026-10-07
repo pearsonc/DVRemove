@@ -2,7 +2,7 @@
 
 Owner: the operator of linux-lab-01. Environment: linux-lab-01. Given: the units, the image and the build folder from `make install-units`, `make deploy` and `make image` are in place.
 
-This follows the rollback of waves 2 and 5. It leaves `/home/chperso/dvremove/state` and everything under `/mnt/WD40MassStorage/dvremove` in place: a title Chris put in `toConvert` or `Converted` is his, and nothing here removes it. The steps read `UNITS`, `DEPLOY`, `IMAGES`, `SC` and `DOCKER`, which you leave unset; the runner points them at a fixture.
+This follows the rollback of waves 2 and 5. It leaves `/home/chperso/dvremove/state` and `toConvert` and `Converted` beside it in place: a title Chris put in `toConvert` or `Converted` is his, and nothing here removes it. The steps read `UNITS`, `DEPLOY`, `IMAGES`, `SC` and `DOCKER`, which you leave unset; the runner points them at a fixture.
 
 ### 1. Stop the timer and any run in progress
 
@@ -48,4 +48,4 @@ test -d "$STATE" && test -s "$STATE/ledger.txt"
 Expect: exit 0: the state folder and its ledger are in place, so a later deployment skips what was converted.
 If not: the state folder is gone. A later deployment reconverts every title in `toConvert`; restore it from a backup if the ledger matters.
 
-To remove the state folder too, run `rm -r /home/chperso/dvremove/state` by hand. To remove the NAS folders, run `rmdir` on `toConvert`, `Converted` and then `dvremove` under `/mnt/WD40MassStorage`, each only while empty.
+To remove the state folder too, run `rm -r /home/chperso/dvremove/state` by hand. To remove the local staging folders, run `rmdir` on `toConvert`, `Converted` and then `dvremove` under `/home/chperso`, each only while empty.

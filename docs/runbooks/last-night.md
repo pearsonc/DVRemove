@@ -40,18 +40,18 @@ test -r "$log" && ! tail -n 2000 "$log" | /usr/bin/grep -F 'memory guard'
 Expect: exit 0 and no line printed.
 If not: the guard stopped a conversion because host memory fell below 4 GiB available or swap grew more than 1 GiB. That is the R4 trigger. Stop the timer by `stop-and-undo.md`, step 1, and lower the limits in `run.sh` before it runs again.
 
-### 5. Check the disk and the NAS folders
+### 5. Check the disk and the staging folders
 
 ```bash
-test -d /mnt/WD40MassStorage/dvremove/toConvert && test -w /mnt/WD40MassStorage/dvremove/Converted && [ "$(df --output=avail -B1G / | tail -1 | tr -d ' ')" -ge 150 ]
+test -d /home/chperso/dvremove/toConvert && test -w /home/chperso/dvremove/Converted && [ "$(df --output=avail -B1G / | tail -1 | tr -d ' ')" -ge 150 ]
 ```
-Expect: exit 0: both NAS folders exist, `Converted` is writable, and the root disk has at least 150 GB free.
-If not: a missing folder is the NAS being down, the R2 trigger: `mount | /usr/bin/grep WD40MassStorage`, and rerun the unit by `systemctl --user start dvremove.service` once it is back. Under 150 GB free is the R3 trigger: find what filled the disk with `du -xh --max-depth=2 /home/chperso | sort -h | tail`.
+Expect: exit 0: both staging folders exist, `Converted` is writable, and the root disk has at least 150 GB free.
+If not: a missing folder is the R2 trigger: recreate it with `mkdir -p` under `/home/chperso/dvremove`, and rerun the unit by `systemctl --user start dvremove.service`. Under 150 GB free is the R3 trigger: find what filled the disk with `du -xh --max-depth=2 /home/chperso | sort -h | tail`.
 
 ### 6. List what is still waiting
 
 ```bash
-in=/mnt/WD40MassStorage/dvremove/toConvert; led=/home/chperso/dvremove/state/ledger.txt
+in=/home/chperso/dvremove/toConvert; led=/home/chperso/dvremove/state/ledger.txt
 test -r "$led" && find "$in" -type f -name '*.mkv' -printf '%f\n' | while IFS= read -r n; do /usr/bin/grep -qF -- "$n" "$led" || echo "waiting: $n"; done; true
 ```
 Expect: exit 0, printing one `waiting:` line per file the ledger does not hold, and none if everything is converted.

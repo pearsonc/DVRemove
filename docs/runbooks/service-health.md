@@ -27,13 +27,13 @@ echo "started $(date -d "@$se" '+%F %T'), ended $(date -d "@$ee" '+%F %T')"
 Expect: exit 0. A run that began after 07:00 was started by hand, and counts as no nightly run. A nightly run that began before 07:00 ended by 07:00.
 If not: the run overlapped household viewing, the R1 trigger. Ask Chris about buffering; move the timer by editing `OnCalendar` in `dvremove.timer`, running `make install-units` and `systemctl --user daemon-reload`, or stop it by `stop-and-undo.md`.
 
-### 3. R2: the last run exited 0 and the NAS folders answer
+### 3. R2: the last run exited 0 and the staging folders exist
 
 ```bash
-[ "$(systemctl --user show dvremove.service -p ExecMainStatus --value)" = 0 ] && test -d /mnt/WD40MassStorage/dvremove/toConvert && test -w /mnt/WD40MassStorage/dvremove/Converted
+[ "$(systemctl --user show dvremove.service -p ExecMainStatus --value)" = 0 ] && test -d /home/chperso/dvremove/toConvert && test -w /home/chperso/dvremove/Converted
 ```
 Expect: exit 0.
-If not: a non-zero status is the R2 trigger when the NAS was down at 01:30: check the mount, then `systemctl --user start dvremove.service` to rerun. Any other non-zero status goes to `last-night.md`.
+If not: a non-zero status is the R2 trigger when a staging folder was missing at 01:30: recreate it, then `systemctl --user start dvremove.service` to rerun. Any other non-zero status goes to `last-night.md`.
 
 ### 4. R3: the root disk has 150 GB free
 

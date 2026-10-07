@@ -19,8 +19,8 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 config=$here/config.yaml
 tag=dvremove:current
-input=/mnt/WD40MassStorage/dvremove/toConvert
-output=/mnt/WD40MassStorage/dvremove/Converted
+input=/home/chperso/dvremove/toConvert
+output=/home/chperso/dvremove/Converted
 state=/home/chperso/dvremove/state
 extra=()
 

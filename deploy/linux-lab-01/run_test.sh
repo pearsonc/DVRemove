@@ -179,9 +179,10 @@ refuse input-home "${st[@]}" -i /home/chperso
 refuse input-comma "${st[@]}" -i "$work/in,x"
 refuse input-colon "${st[@]}" -i "$work/in:x"
 refuse input-option "${st[@]}" -i --privileged
-refuse input-nas "${st[@]}" -i /mnt/WD40MassStorage/dvremove/toConvert
-refuse output-nas "${st[@]}" -o /mnt/WD40MassStorage/dvremove/Converted
-refuse state-nas -c "$cfg" -s /mnt/WD40MassStorage/dvremove/state
+nas=/mnt/WD40MassStorage
+refuse input-nas "${st[@]}" -i "$nas/dvremove/toConvert"
+refuse output-nas "${st[@]}" -o "$nas/dvremove/Converted"
+refuse state-nas -c "$cfg" -s "$nas/dvremove/state"
 refuse state-root -c "$cfg" -s /
 refuse state-host-path -c "$cfg" -s /var/lib
 refuse state-colon -c "$cfg" -s "$work/st:x"
